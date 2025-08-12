@@ -102,14 +102,20 @@ class EnemyComponent extends PositionComponent {
   }
 }
 
+
+typedef DirectionErrorCallback = void Function(String msg);
+
 class SnakeGame extends FlameGame {
+  final DirectionErrorCallback? onDirectionError;
+
+  SnakeGame({this.onDirectionError});
   // grid
   final int gridSize = 24; // pixels per cell (visual)
-  late int gridWidth;
-  late int gridHeight;
+  late final int gridWidth;
+  late final int gridHeight;
 
   // grid-based snake (positions in grid cells)
-  List<Vector2> snake = [];
+  final List<Vector2> snake = [];
   Vector2 direction = Vector2(1, 0);
   Vector2 nextDirection = Vector2(1, 0);
 
@@ -133,8 +139,8 @@ class SnakeGame extends FlameGame {
   bool showPowerUpSelection = false;
 
   // timers
-  late async.Timer gameTimer;
-  late async.Timer enemySpawnTimer;
+  async.Timer? _gameTimer;
+  async.Timer? _enemySpawnTimer;
   double baseMoveInterval = 0.25; // seconds between logical moves
 
   // enemies
@@ -148,36 +154,50 @@ class SnakeGame extends FlameGame {
   double multiFoodDuration = 0.0;
   double speedMultiplier = 1.0;
 
-  List<PowerUp> availablePowerUps = [];
+  final List<PowerUp> availablePowerUps = [];
 
   // interpolation smoothing (how fast pixels move to target)
-  double pixelLerpSpeed = 12.0; // higher -> faster visual interpolation
+  final double pixelLerpSpeed = 12.0; // higher -> faster visual interpolation
+
+  /// Helper: true si le jeu est actif (pas game over, pas en pause, pas en sélection de power-up)
+  bool get isGameActive => gameStarted && !gameOver && !showPowerUpSelection;
+
+  /// Annule et nettoie les timers pour éviter les doublons ou fuites mémoire
+  void _cancelTimers() {
+    _gameTimer?.cancel();
+    _enemySpawnTimer?.cancel();
+  }
+
 
   @override
   Future<void> onLoad() async {
     super.onLoad();
     gridWidth = (size.x / gridSize).floor();
     gridHeight = (size.y / gridSize).floor();
-    initializePowerUps();
-    initializeGame();
-    startGameLoop();
-    startEnemySpawning();
+    _initializePowerUps();
+    _initializeGame();
+    _startGameLoop();
+    _startEnemySpawning();
   }
 
-  void initializePowerUps() {
-    availablePowerUps = [
+
+  void _initializePowerUps() {
+    availablePowerUps.clear();
+    availablePowerUps.addAll([
       PowerUp(PowerUpType.speed, "Vitesse", "Augmente la vitesse de 20%", Colors.yellow),
       PowerUp(PowerUpType.shield, "Bouclier", "Protection contre les ennemis (10s)", Colors.blue),
       PowerUp(PowerUpType.multiFood, "Multi-Nourriture", "Double les points de nourriture (15s)", Colors.orange),
-    ];
+    ]);
   }
 
-  void initializeGame() {
-    snake = [
+
+  void _initializeGame() {
+    snake.clear();
+    snake.addAll([
       Vector2((gridWidth / 2).toDouble(), (gridHeight / 2).toDouble()),
       Vector2((gridWidth / 2 - 1).toDouble(), (gridHeight / 2).toDouble()),
       Vector2((gridWidth / 2 - 2).toDouble(), (gridHeight / 2).toDouble()),
-    ];
+    ]);
     // create pixel positions aligned to grid
     _pixelPositions.clear();
     for (var seg in snake) {
@@ -204,26 +224,27 @@ class SnakeGame extends FlameGame {
     generateFood();
   }
 
-  void startGameLoop() {
-    // cancel if existing
-    try { gameTimer.cancel(); } catch (_) {}
+
+  void _startGameLoop() {
+    _gameTimer?.cancel();
     final intervalMs = (baseMoveInterval / speedMultiplier * 1000).round();
-    gameTimer = async.Timer.periodic(Duration(milliseconds: intervalMs), (_) {
-      if (gameStarted && !gameOver && !showPowerUpSelection) {
+    _gameTimer = async.Timer.periodic(Duration(milliseconds: intervalMs), (_) {
+      if (isGameActive) {
         _stepSnake(); // logical move (grid)
       }
     });
   }
 
-  void startEnemySpawning() {
-    try { enemySpawnTimer.cancel(); } catch (_) {}
-    enemySpawnTimer = async.Timer.periodic(Duration(milliseconds: (enemySpawnRate * 1000).round()), (_) {
-      if (gameStarted && !gameOver && !showPowerUpSelection) {
+  void _startEnemySpawning() {
+    _enemySpawnTimer?.cancel();
+    _enemySpawnTimer = async.Timer.periodic(Duration(milliseconds: (enemySpawnRate * 1000).round()), (_) {
+      if (isGameActive) {
         _spawnEnemy();
       }
     });
   }
 
+  /// Fait apparaître un ennemi sur un bord aléatoire
   void _spawnEnemy() {
     // spawn at random side, convert to pixel coords
     int side = random.nextInt(4);
@@ -263,6 +284,7 @@ class SnakeGame extends FlameGame {
   }
 
   // logical grid step
+  /// Effectue un déplacement logique du serpent sur la grille
   void _stepSnake() {
     if (!gameStarted || gameOver || showPowerUpSelection) return;
 
@@ -305,7 +327,7 @@ class SnakeGame extends FlameGame {
       // speed up gradually
       if (baseMoveInterval > 0.08) {
         baseMoveInterval *= 0.98;
-        startGameLoop();
+  _startGameLoop();
       }
     } else {
       // remove tail logically and pixel target
@@ -314,6 +336,7 @@ class SnakeGame extends FlameGame {
     }
   }
 
+  /// Met à jour l'état du jeu à chaque frame (interpolation, timers, etc.)
   @override
   void update(double dt) {
     super.update(dt);
@@ -346,6 +369,7 @@ class SnakeGame extends FlameGame {
     }
   }
 
+  /// Vérifie si le joueur passe au niveau supérieur
   void checkLevelUp() {
     if (experience >= experienceToNextLevel) {
       level++;
@@ -355,7 +379,7 @@ class SnakeGame extends FlameGame {
       // increase difficulty
       if (enemySpawnRate > 1.0) {
         enemySpawnRate *= 0.9;
-        startEnemySpawning();
+  _startEnemySpawning();
       }
 
       // show power-up overlay (UI side reads this)
@@ -363,11 +387,12 @@ class SnakeGame extends FlameGame {
     }
   }
 
+  /// Applique le power-up sélectionné
   void selectPowerUp(PowerUpType type) {
     switch (type) {
       case PowerUpType.speed:
         speedMultiplier += 0.2;
-        startGameLoop();
+  _startGameLoop();
         break;
       case PowerUpType.shield:
         hasShield = true;
@@ -381,6 +406,7 @@ class SnakeGame extends FlameGame {
     showPowerUpSelection = false;
   }
 
+  /// Génère une nouvelle position de nourriture qui ne chevauche pas le serpent
   void generateFood() {
     Vector2 newFood;
     do {
@@ -393,31 +419,35 @@ class SnakeGame extends FlameGame {
   }
 
   // called from Flutter GestureDetector in main.dart
+  /// Gère le swipe utilisateur pour changer la direction du serpent
   void handlePanUpdate(DragUpdateDetails details) {
     if (!gameStarted || gameOver || showPowerUpSelection) return;
     final delta = details.delta;
+    Vector2? newDir;
     if (delta.dx.abs() > delta.dy.abs()) {
       // horizontal swipe
-      final newDir = delta.dx > 0 ? Vector2(1, 0) : Vector2(-1, 0);
-      if (!(direction.x == -newDir.x && direction.y == -newDir.y)) {
-        nextDirection = newDir;
-      }
+      newDir = delta.dx > 0 ? Vector2(1, 0) : Vector2(-1, 0);
     } else {
-      final newDir = delta.dy > 0 ? Vector2(0, 1) : Vector2(0, -1);
-      if (!(direction.x == -newDir.x && direction.y == -newDir.y)) {
-        nextDirection = newDir;
-      }
+      newDir = delta.dy > 0 ? Vector2(0, 1) : Vector2(0, -1);
     }
+    if (direction.x == -newDir.x && direction.y == -newDir.y) {
+      // Demi-tour interdit
+      onDirectionError?.call("Impossible de faire demi-tour !");
+      return;
+    }
+    nextDirection = newDir;
   }
 
   // optional tap handler (e.g., pause / resume)
+  /// Gère le tap utilisateur (peut servir à pause/reprendre ou boost)
   void handleTapDown(TapDownDetails details) {
     // currently unused; can implement pause/resume or boost
   }
 
+  /// Change la direction du serpent via une chaîne ('up', 'down', ...)
   void changeDirection(String newDirection) {
     if (gameOver || showPowerUpSelection) return;
-    Vector2 newDir;
+    Vector2? newDir;
     switch (newDirection) {
       case 'up':
         newDir = Vector2(0, -1);
@@ -434,26 +464,31 @@ class SnakeGame extends FlameGame {
       default:
         return;
     }
-    if (direction.x != -newDir.x || direction.y != -newDir.y) {
-      nextDirection = newDir;
+    if (direction.x == -newDir.x && direction.y == -newDir.y) {
+      onDirectionError?.call("Impossible de faire demi-tour !");
+      return;
     }
+    nextDirection = newDir;
   }
 
+  /// Termine la partie
   void endGame() {
     gameOver = true;
     gameStarted = false;
   }
 
+
+  /// Réinitialise la partie
   void resetGame() {
-    try { gameTimer.cancel(); } catch (_) {}
-    try { enemySpawnTimer.cancel(); } catch (_) {}
+    _cancelTimers();
     baseMoveInterval = 0.25;
     enemySpawnRate = 3.0;
-    initializeGame();
-    startGameLoop();
-    startEnemySpawning();
+    _initializeGame();
+    _startGameLoop();
+    _startEnemySpawning();
   }
 
+  /// Dessine le jeu (grille, serpent, nourriture, ennemis, UI overlay)
   @override
   void render(Canvas canvas) {
     // DRAW BACKGROUND & GRID FIRST
@@ -505,8 +540,7 @@ class SnakeGame extends FlameGame {
 
   @override
   void onRemove() {
-    try { gameTimer.cancel(); } catch (_) {}
-    try { enemySpawnTimer.cancel(); } catch (_) {}
+    _cancelTimers();
     super.onRemove();
   }
 }
