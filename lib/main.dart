@@ -36,6 +36,7 @@ class _GameScreenState extends State<GameScreen> {
   late SnakeGame game;
   bool _paused = false;
   String? _directionErrorMsg;
+  Timer? _uiTick;
 
   @override
   void initState() {
@@ -43,7 +44,11 @@ class _GameScreenState extends State<GameScreen> {
     game = SnakeGame(
       onDirectionError: _showDirectionError,
     );
+    // Tick l'UI fréquemment pour refléter les changements de l'état du jeu (gameOver, score, etc.)
+    _uiTick = Timer.periodic(const Duration(milliseconds: 100), (_) {
       if (mounted) setState(() {});
+    });
+    if (mounted) setState(() {});
   }
 
   void _showDirectionError(String msg) {
@@ -64,6 +69,12 @@ class _GameScreenState extends State<GameScreen> {
       _paused = !_paused;
       game.gameStarted = !_paused;
     });
+  }
+
+  @override
+  void dispose() {
+    _uiTick?.cancel();
+    super.dispose();
   }
 
   @override
