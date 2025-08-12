@@ -1,6 +1,8 @@
 // lib/snake_game.dart
 import 'dart:math';
 import 'dart:async' as async;
+import 'dart:typed_data';
+import 'dart:ui' as ui;
 import 'package:flame/components.dart';
 import 'package:flame/game.dart';
 import 'package:flutter/material.dart';
@@ -66,23 +68,16 @@ class EnemyComponent extends PositionComponent {
       removeFromParent();
     }
 
-    // Collision with snake head (use pixel head from gameRef)
-    if (gameRef._pixelPositions.isNotEmpty) {
-      final headPixel = gameRef._pixelPositions.first + Vector2(gameRef.gridSize / 2, gameRef.gridSize / 2);
-      final dist = (enemy.position - headPixel).length;
-      if (dist < enemy.size + (gameRef.gridSize / 2)) {
-        // Collision occured
-        if (gameRef.hasShield) {
-          // player destroys enemy
-          gameRef.enemiesKilled++;
-          gameRef.experience += 5;
-          gameRef.score += 50;
-          gameRef.checkLevelUp();
-          removeFromParent();
-        } else {
-          // kill player (game over)
-          gameRef.endGame();
-        }
+    // Collision with snake head (head eats enemies now)
+    final head = gameRef.headCenter;
+    if (head != null) {
+      final dist = (enemy.position - head).length;
+      if (dist < enemy.size + gameRef.snakeHeadRadius) {
+        gameRef.enemiesKilled++;
+        gameRef.experience += 5;
+        gameRef.score += 50;
+        gameRef.checkLevelUp();
+        removeFromParent();
       }
     }
   }
@@ -103,16 +98,19 @@ class EnemyComponent extends PositionComponent {
 }
 
 
-typedef DirectionErrorCallback = void Function(String msg);
-
 class SnakeGame extends FlameGame {
-  final DirectionErrorCallback? onDirectionError;
-
-  SnakeGame({this.onDirectionError});
+  SnakeGame({this.playerSpeed = 140.0});
   // grid
   final int gridSize = 24; // pixels per cell (visual)
   late final int gridWidth;
   late final int gridHeight;
+  // playfield (texture zone) with vertical margins
+  // Marges de la zone de jeu: on garde le haut, on réduit par le bas
+  final double topMargin = 48.0;
+  final double bottomExtra = 120.0; // augmente davantage uniquement le bas
+  double get bottomMargin => topMargin + bottomExtra;
+  late Vector2 playOrigin; // top-left pixel of playfield
+  late Vector2 playSize;   // width/height of playfield in pixels
 
   // grid-based snake (positions in grid cells)
   final List<Vector2> snake = [];
@@ -120,7 +118,6 @@ class SnakeGame extends FlameGame {
   Vector2 nextDirection = Vector2(1, 0);
 
   // pixel positions for smooth rendering (one per segment)
-  final List<Vector2> _pixelPositions = [];
 
   // food in grid coords
   Vector2? food;
@@ -159,6 +156,29 @@ class SnakeGame extends FlameGame {
   // interpolation smoothing (how fast pixels move to target)
   final double pixelLerpSpeed = 12.0; // higher -> faster visual interpolation
 
+  // grass background
+  ui.Image? _grassTile;
+  Paint? _grassPaint;
+  final int _grassTileSize = 64; // px
+  // Joystick (four-direction control) provided by Flutter overlay
+  Vector2? _joystickDelta; // normalized [-1,1]
+  final double _joystickDeadZone = 0.2;
+  int _pendingGrowth = 0;
+
+  // Continuous movement (pixels per second) like enemies
+  double playerSpeed; // configurable via ctor
+  Vector2 _headPixel = Vector2.zero();
+  // Keep track of last grid cell we processed for collisions/food
+  Vector2 _headGrid = Vector2.zero();
+  // Smooth body via sampled trail
+  final List<Vector2> _trail = [];
+  final List<Vector2> _segmentCenters = [];
+  int _segmentCount = 0;
+  double get _segmentSpacing => gridSize.toDouble() * 0.92;
+  final double _minTrailSample = 1.0; // px between samples (finer for smoother follow)
+  // Permet au corps d'avancer même quand la tête s'arrête (rattrapage le long de la trace)
+  double _catchup = 0.0;
+
   /// Helper: true si le jeu est actif (pas game over, pas en pause, pas en sélection de power-up)
   bool get isGameActive => gameStarted && !gameOver && !showPowerUpSelection;
 
@@ -172,12 +192,75 @@ class SnakeGame extends FlameGame {
   @override
   Future<void> onLoad() async {
     super.onLoad();
-    gridWidth = (size.x / gridSize).floor();
-    gridHeight = (size.y / gridSize).floor();
+  // Define playfield occupying full width, smaller height (top/bottom margins)
+  playOrigin = Vector2(0, topMargin);
+  playSize = Vector2(size.x, (size.y - topMargin - bottomMargin).clamp(0, size.y));
+  gridWidth = (playSize.x / gridSize).floor();
+  gridHeight = (playSize.y / gridSize).floor();
+    await _generateGrassTile();
     _initializePowerUps();
     _initializeGame();
     _startGameLoop();
     _startEnemySpawning();
+  }
+
+  // Called from Flutter overlay to feed joystick input
+  void setJoystickDelta(double dx, double dy) {
+    if (dx == 0 && dy == 0) {
+      _joystickDelta = null;
+    } else {
+      _joystickDelta = Vector2(dx, dy);
+    }
+  }
+
+  Future<void> _generateGrassTile() async {
+    // Create a simple procedural grass tile once
+    final double s = _grassTileSize.toDouble();
+    final recorder = ui.PictureRecorder();
+    final canvas = Canvas(recorder, Rect.fromLTWH(0, 0, s, s));
+
+    // Base green
+    final base = Paint()..color = const Color(0xFF1B5E20); // dark green
+    canvas.drawRect(Rect.fromLTWH(0, 0, s, s), base);
+
+    final rng = Random(42);
+    // Add lighter patches
+    for (int i = 0; i < 120; i++) {
+      final cx = rng.nextDouble() * s;
+      final cy = rng.nextDouble() * s;
+      final r = 0.5 + rng.nextDouble() * 1.5;
+      final paint = Paint()
+        ..color = Color.lerp(const Color(0xFF43A047), const Color(0xFF2E7D32), rng.nextDouble())!
+        ..style = PaintingStyle.fill;
+      canvas.drawCircle(Offset(cx, cy), r, paint);
+    }
+
+    // Draw some thin blades
+    final bladePaint = Paint()
+      ..color = const Color(0xFF66BB6A).withValues(alpha: 0.8)
+      ..strokeWidth = 1.0
+      ..strokeCap = StrokeCap.round;
+    for (int i = 0; i < 70; i++) {
+      final x = rng.nextDouble() * s;
+      final y = rng.nextDouble() * s;
+      final len = 2.0 + rng.nextDouble() * 4.0;
+      final angle = (rng.nextDouble() - 0.5) * 0.8; // slight tilt
+      final dx = len * cos(angle);
+      final dy = -len * sin(angle);
+      canvas.drawLine(Offset(x, y), Offset(x + dx, y + dy), bladePaint);
+    }
+
+    final picture = recorder.endRecording();
+    _grassTile = await picture.toImage(_grassTileSize, _grassTileSize);
+    // Build shader paint for tiling
+    final Float64List identity = Float64List.fromList(<double>[
+      1, 0, 0, 0,
+      0, 1, 0, 0,
+      0, 0, 1, 0,
+      0, 0, 0, 1,
+    ]);
+    _grassPaint = Paint()
+      ..shader = ui.ImageShader(_grassTile!, TileMode.repeated, TileMode.repeated, identity);
   }
 
 
@@ -198,13 +281,34 @@ class SnakeGame extends FlameGame {
       Vector2((gridWidth / 2 - 1).toDouble(), (gridHeight / 2).toDouble()),
       Vector2((gridWidth / 2 - 2).toDouble(), (gridHeight / 2).toDouble()),
     ]);
-    // create pixel positions aligned to grid
-    _pixelPositions.clear();
-    for (var seg in snake) {
-      _pixelPositions.add(Vector2(seg.x * gridSize, seg.y * gridSize));
+    // initialize smooth body model
+    _segmentCount = snake.length;
+    _segmentCenters.clear();
+    final initialHeadCenter = Vector2(
+      playOrigin.x + snake.first.x * gridSize + gridSize / 2,
+      playOrigin.y + snake.first.y * gridSize + gridSize / 2,
+    );
+    // Determine initial direction (fallback to right if zero)
+    Vector2 dir0 = direction.clone();
+    if (dir0.length2 == 0) dir0 = Vector2(1, 0);
+    dir0.normalize();
+    for (int i = 0; i < _segmentCount; i++) {
+      _segmentCenters.add(initialHeadCenter - dir0 * (_segmentSpacing * i));
+    }
+    // Seed the trail backward so body doesn't collapse when not yet moved
+    _trail
+      ..clear()
+      ..add(initialHeadCenter.clone());
+    final double seedLen = (_segmentCount - 1) * _segmentSpacing + 64;
+    double acc = 0;
+    while (acc < seedLen) {
+      final last = _trail.last;
+      final next = last - dir0 * _minTrailSample;
+      _trail.add(next);
+      acc += _minTrailSample;
     }
 
-    direction = Vector2(1, 0);
+  direction = Vector2(1, 0);
     nextDirection = Vector2(1, 0);
     score = 0;
     level = 1;
@@ -220,19 +324,18 @@ class SnakeGame extends FlameGame {
     hasMultiFood = false;
     speedMultiplier = 1.0;
 
-    food = null;
+  // Seed pixel head based on current grid head
+  _headPixel = Vector2(playOrigin.x + snake.first.x * gridSize, playOrigin.y + snake.first.y * gridSize);
+  _headGrid = snake.first.clone();
+  food = null;
     generateFood();
   }
 
 
   void _startGameLoop() {
+    // Still used to progressively speed up legacy timing (not moving by cell anymore)
     _gameTimer?.cancel();
-    final intervalMs = (baseMoveInterval / speedMultiplier * 1000).round();
-    _gameTimer = async.Timer.periodic(Duration(milliseconds: intervalMs), (_) {
-      if (isGameActive) {
-        _stepSnake(); // logical move (grid)
-      }
-    });
+    _gameTimer = async.Timer.periodic(const Duration(seconds: 10), (_) {});
   }
 
   void _startEnemySpawning() {
@@ -246,25 +349,26 @@ class SnakeGame extends FlameGame {
 
   /// Fait apparaître un ennemi sur un bord aléatoire
   void _spawnEnemy() {
-    // spawn at random side, convert to pixel coords
-    int side = random.nextInt(4);
+    // Spawn at the extremities (edges) of the texture playfield
+    int side = random.nextInt(4); // 0: top, 1: right, 2: bottom, 3: left
     Vector2 pos;
     Vector2 dir;
+    final Rect r = playRect;
     switch (side) {
-      case 0:
-        pos = Vector2(random.nextDouble() * size.x, -30);
+      case 0: // top
+        pos = Vector2(r.left + random.nextDouble() * r.width, r.top - 30);
         dir = Vector2(0, 1);
         break;
-      case 1:
-        pos = Vector2(size.x + 30, random.nextDouble() * size.y);
+      case 1: // right
+        pos = Vector2(r.right + 30, r.top + random.nextDouble() * r.height);
         dir = Vector2(-1, 0);
         break;
-      case 2:
-        pos = Vector2(random.nextDouble() * size.x, size.y + 30);
+      case 2: // bottom
+        pos = Vector2(r.left + random.nextDouble() * r.width, r.bottom + 30);
         dir = Vector2(0, -1);
         break;
-      default:
-        pos = Vector2(-30, random.nextDouble() * size.y);
+      default: // left
+        pos = Vector2(r.left - 30, r.top + random.nextDouble() * r.height);
         dir = Vector2(1, 0);
     }
 
@@ -284,55 +388,108 @@ class SnakeGame extends FlameGame {
   }
 
   // logical grid step
-  /// Effectue un déplacement logique du serpent sur la grille
-  void _stepSnake() {
+  /// Mouvement continu et corps fluide via trail
+  void _stepSnakeContinuous(double dt) {
     if (!gameStarted || gameOver || showPowerUpSelection) return;
-
+    // Apply joystick decision first
     direction = nextDirection;
 
-    final newHead = Vector2(snake.first.x + direction.x, snake.first.y + direction.y);
+    // Move the head pixel position continuously
+    final vel = direction.normalized() * playerSpeed * dt;
+    _headPixel += vel;
 
-    // collisions walls
-    if (newHead.x < 0 || newHead.x >= gridWidth || newHead.y < 0 || newHead.y >= gridHeight) {
-      if (!hasShield) {
-        endGame();
-        return;
-      }
+    // Head center for precise collisions/bounds
+    final headCenter = _headPixel + Vector2(gridSize / 2, gridSize / 2);
+    final Rect r = playRect;
+    final double rr = snakeHeadRadius;
+    // Bounds: game over as soon as the head circle touches the edge (independent of shield)
+    if (headCenter.x - rr < r.left || headCenter.x + rr > r.right || headCenter.y - rr < r.top || headCenter.y + rr > r.bottom) {
+      endGame();
+      return;
     }
 
-    // collision self
-    for (var s in snake) {
-      if (s.x == newHead.x && s.y == newHead.y) {
-        if (!hasShield) {
-          endGame();
-          return;
-        }
+    // Pixel-based food collision (eat on touch)
+    if (food != null) {
+      final foodCenter = Offset(
+        playOrigin.x + food!.x * gridSize + gridSize / 2,
+        playOrigin.y + food!.y * gridSize + gridSize / 2,
+      );
+      final d = (Offset(headCenter.x, headCenter.y) - foodCenter).distance;
+      if (d <= snakeHeadRadius + (gridSize / 2 - 2)) {
+        _pendingGrowth += hasMultiFood ? 2 : 1;
+        int points = hasMultiFood ? 20 : 10;
+        score += points;
+        experience += 2;
+        foodEaten++;
+        generateFood();
+        checkLevelUp();
       }
     }
+  // Convert to grid cell for growth pacing only
+  final gx = ((_headPixel.x - playOrigin.x) / gridSize).floorToDouble();
+  final gy = ((_headPixel.y - playOrigin.y) / gridSize).floorToDouble();
+  final newGrid = Vector2(gx, gy);
 
-    snake.insert(0, newHead);
-
-    // ensure pixel positions list length matches
-    _pixelPositions.insert(0, Vector2(newHead.x * gridSize, newHead.y * gridSize));
-
-    // food?
-    if (food != null && newHead.x == food!.x && newHead.y == food!.y) {
-      int points = hasMultiFood ? 20 : 10;
-      score += points;
-      experience += 2;
-      foodEaten++;
-      generateFood();
-      checkLevelUp();
-
-      // speed up gradually
-      if (baseMoveInterval > 0.08) {
-        baseMoveInterval *= 0.98;
-  _startGameLoop();
-      }
+    // Update sampled trail with head center
+    final headC = _headPixel + Vector2(gridSize / 2, gridSize / 2);
+    // Distance parcourue par la tête ce frame (pour piloter le rattrapage)
+    double moveDist = 0.0;
+    if (_trail.isNotEmpty) {
+      moveDist = (headC - _trail.first).length;
+    }
+    if (_trail.isEmpty || (_trail.first - headC).length >= _minTrailSample) {
+      _trail.insert(0, headC.clone());
     } else {
-      // remove tail logically and pixel target
-      snake.removeLast();
-      _pixelPositions.removeLast();
+      _trail[0] = headC.clone();
+    }
+    // Trim trail to needed length
+    double needed = (_segmentCount - 1) * _segmentSpacing - _catchup;
+    if (needed < 0) needed = 0;
+    needed += 64; // marge de sécurité
+    double acc = 0;
+    for (int i = 0; i < _trail.length - 1; i++) {
+      acc += (_trail[i] - _trail[i + 1]).length;
+      if (acc > needed) {
+        _trail.removeRange(i + 1, _trail.length);
+        break;
+      }
+    }
+    // Met à jour le rattrapage: si la tête bouge, on réduit le retard; sinon le corps avance
+    if (moveDist > 0) {
+      _catchup -= moveDist;
+      if (_catchup < 0) _catchup = 0;
+    } else {
+      final maxCatch = (_segmentCount - 1) * _segmentSpacing;
+      _catchup += playerSpeed * dt;
+      if (_catchup > maxCatch) _catchup = maxCatch;
+    }
+    // Apply pending growth when entering a new cell (pace growth)
+    if (newGrid.x != _headGrid.x || newGrid.y != _headGrid.y) {
+      if (_pendingGrowth > 0) {
+        _segmentCount += _pendingGrowth;
+        _pendingGrowth = 0;
+      }
+      _headGrid = newGrid;
+    }
+    // Ensure centers list size
+    if (_segmentCenters.length != _segmentCount) {
+      if (_segmentCenters.isEmpty) {
+        _segmentCenters.addAll(List.generate(_segmentCount, (i) => headC.clone()));
+      } else if (_segmentCenters.length < _segmentCount) {
+        final last = _segmentCenters.last;
+        _segmentCenters.addAll(List.generate(_segmentCount - _segmentCenters.length, (i) => last.clone()));
+      } else {
+        _segmentCenters.removeRange(_segmentCount, _segmentCenters.length);
+      }
+      // Clamp le rattrapage au nouveau maximum
+      final maxCatch = (_segmentCount - 1) * _segmentSpacing;
+      if (_catchup > maxCatch) _catchup = maxCatch;
+    }
+    // Sample segment centers along the trail
+    for (int idx = 0; idx < _segmentCount; idx++) {
+      double targetDist = idx * _segmentSpacing - _catchup;
+      if (targetDist < 0) targetDist = 0;
+      _segmentCenters[idx] = _sampleTrail(targetDist);
     }
   }
 
@@ -342,17 +499,14 @@ class SnakeGame extends FlameGame {
     super.update(dt);
     if (!gameStarted || gameOver || showPowerUpSelection) return;
 
-    // Smoothly interpolate pixel positions to their target (grid * gridSize)
-    for (int i = 0; i < snake.length; i++) {
-      final target = Vector2(snake[i].x * gridSize, snake[i].y * gridSize);
-      final current = _pixelPositions[i];
-      // simple lerp toward target:
-      final lerpT = (1 - (1 / (1 + pixelLerpSpeed * dt))).clamp(0.0, 1.0);
-      current.x = current.x + (target.x - current.x) * lerpT;
-      current.y = current.y + (target.y - current.y) * lerpT;
-      // update stored
-      _pixelPositions[i] = current;
+    // Joystick input (from Flutter) -> analog direction (normalized)
+    final joy = _joystickDelta;
+    if (joy != null && joy.length > _joystickDeadZone) {
+      nextDirection = joy.normalized();
     }
+
+  // Continuous movement
+  _stepSnakeContinuous(dt);
 
     // Update power-up timers
     if (hasShield) {
@@ -372,7 +526,6 @@ class SnakeGame extends FlameGame {
   /// Vérifie si le joueur passe au niveau supérieur
   void checkLevelUp() {
     if (experience >= experienceToNextLevel) {
-      level++;
       experience = 0;
       experienceToNextLevel = (experienceToNextLevel * 1.5).round();
 
@@ -408,35 +561,33 @@ class SnakeGame extends FlameGame {
 
   /// Génère une nouvelle position de nourriture qui ne chevauche pas le serpent
   void generateFood() {
-    Vector2 newFood;
-    do {
-      newFood = Vector2(
+    // Place food avoiding current segment centers if possible
+    for (int attempts = 0; attempts < 200; attempts++) {
+      final candidate = Vector2(
         random.nextInt(gridWidth).toDouble(),
         random.nextInt(gridHeight).toDouble(),
       );
-    } while (snake.any((segment) => segment.x == newFood.x && segment.y == newFood.y));
-    food = newFood;
+      final c = Offset(
+        playOrigin.x + candidate.x * gridSize + gridSize / 2,
+        playOrigin.y + candidate.y * gridSize + gridSize / 2,
+      );
+      bool ok = true;
+      for (final s in _segmentCenters) {
+        if ((Offset(s.x, s.y) - c).distance < gridSize * 0.8) {
+          ok = false;
+          break;
+        }
+      }
+      if (ok) { food = candidate; return; }
+    }
+    // Fallback
+    food = Vector2(
+      random.nextInt(gridWidth).toDouble(),
+      random.nextInt(gridHeight).toDouble(),
+    );
   }
 
-  // called from Flutter GestureDetector in main.dart
-  /// Gère le swipe utilisateur pour changer la direction du serpent
-  void handlePanUpdate(DragUpdateDetails details) {
-    if (!gameStarted || gameOver || showPowerUpSelection) return;
-    final delta = details.delta;
-    Vector2? newDir;
-    if (delta.dx.abs() > delta.dy.abs()) {
-      // horizontal swipe
-      newDir = delta.dx > 0 ? Vector2(1, 0) : Vector2(-1, 0);
-    } else {
-      newDir = delta.dy > 0 ? Vector2(0, 1) : Vector2(0, -1);
-    }
-    if (direction.x == -newDir.x && direction.y == -newDir.y) {
-      // Demi-tour interdit
-      onDirectionError?.call("Impossible de faire demi-tour !");
-      return;
-    }
-    nextDirection = newDir;
-  }
+  // Swipe retiré: le contrôle se fait via joystick
 
   // optional tap handler (e.g., pause / resume)
   /// Gère le tap utilisateur (peut servir à pause/reprendre ou boost)
@@ -446,7 +597,7 @@ class SnakeGame extends FlameGame {
 
   /// Change la direction du serpent via une chaîne ('up', 'down', ...)
   void changeDirection(String newDirection) {
-    if (gameOver || showPowerUpSelection) return;
+  if (gameOver || showPowerUpSelection) return;
     Vector2? newDir;
     switch (newDirection) {
       case 'up':
@@ -464,10 +615,7 @@ class SnakeGame extends FlameGame {
       default:
         return;
     }
-    if (direction.x == -newDir.x && direction.y == -newDir.y) {
-      onDirectionError?.call("Impossible de faire demi-tour !");
-      return;
-    }
+  if (direction.x == -newDir.x && direction.y == -newDir.y) return;
     nextDirection = newDir;
   }
 
@@ -491,36 +639,57 @@ class SnakeGame extends FlameGame {
   /// Dessine le jeu (grille, serpent, nourriture, ennemis, UI overlay)
   @override
   void render(Canvas canvas) {
-    // DRAW BACKGROUND & GRID FIRST
-    // background
-    canvas.drawRect(Rect.fromLTWH(0, 0, size.x, size.y), Paint()..color = Colors.black);
+    // Dark outside area
+    canvas.drawRect(Rect.fromLTWH(0, 0, size.x, size.y), Paint()..color = const Color(0xFF0D2813));
+    // Draw grass texture only inside playfield
+    if (_grassPaint != null) {
+      canvas.drawRect(playRect, _grassPaint!);
+    } else {
+      canvas.drawRect(playRect, Paint()..color = const Color(0xFF1B5E20));
+    }
 
-    // grid lines (subtle)
-    final gridPaint = Paint()..color = Colors.grey.withOpacity(0.08);
+    // grid lines (more discreet) inside the playfield only
+  final gridPaint = Paint()..color = Colors.black.withValues(alpha: 0.04);
+    canvas.save();
+    canvas.clipRect(playRect);
     for (int i = 0; i <= gridWidth; i++) {
-      final x = i * gridSize.toDouble();
-      canvas.drawLine(Offset(x, 0), Offset(x, size.y), gridPaint);
+      final x = playOrigin.x + i * gridSize.toDouble();
+      canvas.drawLine(Offset(x, playOrigin.y), Offset(x, playOrigin.y + playSize.y), gridPaint);
     }
     for (int j = 0; j <= gridHeight; j++) {
-      final y = j * gridSize.toDouble();
-      canvas.drawLine(Offset(0, y), Offset(size.x, y), gridPaint);
+      final y = playOrigin.y + j * gridSize.toDouble();
+      canvas.drawLine(Offset(playOrigin.x, y), Offset(playOrigin.x + playSize.x, y), gridPaint);
     }
+    canvas.restore();
 
-    // draw snake (visual/pixel positions) BEFORE components so components (enemies) appear ON TOP
+    // draw snake (rounded segments) BEFORE components
     final headPaint = Paint()..color = hasShield ? Colors.lightBlue : Colors.lightGreen;
     final bodyPaint = Paint()..color = hasShield ? Colors.cyan : Colors.green;
-    for (int i = 0; i < _pixelPositions.length; i++) {
-      final p = _pixelPositions[i];
+    final double r = snakeHeadRadius;
+    for (int i = _segmentCenters.length - 1; i >= 0; i--) {
+      final c = _segmentCenters[i];
       final paint = i == 0 ? headPaint : bodyPaint;
-      canvas.drawRect(
-        Rect.fromLTWH(p.x + 1, p.y + 1, gridSize.toDouble() - 2, gridSize.toDouble() - 2),
-        paint,
-      );
+      canvas.drawCircle(Offset(c.x, c.y), r, paint);
+    }
+    // simple eyes on the head for character
+    if (_segmentCenters.isNotEmpty) {
+      final center = Offset(_segmentCenters.first.x, _segmentCenters.first.y);
+      final dir = direction.normalized();
+      final eyeOffset = Offset(dir.x * 4, dir.y * 4);
+      final eyeSep = Offset(-dir.y * 5, dir.x * 5);
+      final eyePaint = Paint()..color = Colors.white;
+      final pupilPaint = Paint()..color = Colors.black;
+      final e1 = center + eyeOffset + eyeSep;
+      final e2 = center + eyeOffset - eyeSep;
+      canvas.drawCircle(e1, 3, eyePaint);
+      canvas.drawCircle(e2, 3, eyePaint);
+      canvas.drawCircle(e1, 1.5, pupilPaint);
+      canvas.drawCircle(e2, 1.5, pupilPaint);
     }
 
     // draw food also BEFORE components (if you prefer food above enemies you'd make food a component with higher priority)
     if (food != null) {
-      final center = Offset(food!.x * gridSize + gridSize / 2, food!.y * gridSize + gridSize / 2);
+      final center = Offset(playOrigin.x + food!.x * gridSize + gridSize / 2, playOrigin.y + food!.y * gridSize + gridSize / 2);
       final r = gridSize / 2 - 2;
       final paint = Paint()..color = hasMultiFood ? Colors.orange : Colors.red;
       canvas.drawCircle(center, r, paint);
@@ -541,6 +710,33 @@ class SnakeGame extends FlameGame {
   @override
   void onRemove() {
     _cancelTimers();
+  // Cleanup generated image
+  _grassTile?.dispose();
     super.onRemove();
+  }
+
+  // Convenience getter: rectangle of the texture/playfield
+  Rect get playRect => Rect.fromLTWH(playOrigin.x, playOrigin.y, playSize.x, playSize.y);
+
+  double get snakeHeadRadius => gridSize * 0.45;
+
+  // Current head center (pixels)
+  Vector2? get headCenter => _segmentCenters.isNotEmpty ? _segmentCenters.first : null;
+
+  // Sample a point at a given distance along the trail from the head
+  Vector2 _sampleTrail(double distFromHead) {
+    if (_trail.isEmpty) return Vector2(_headPixel.x + gridSize / 2, _headPixel.y + gridSize / 2);
+    double d = 0;
+    for (int i = 0; i < _trail.length - 1; i++) {
+      final a = _trail[i];
+      final b = _trail[i + 1];
+      final segLen = (a - b).length;
+      if (d + segLen >= distFromHead) {
+        final t = (distFromHead - d) / segLen;
+        return Vector2(a.x + (b.x - a.x) * t, a.y + (b.y - a.y) * t);
+      }
+      d += segLen;
+    }
+    return _trail.last.clone();
   }
 }

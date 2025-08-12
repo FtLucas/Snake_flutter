@@ -29,21 +29,17 @@ class GameScreen extends StatefulWidget {
   const GameScreen({super.key});
 
   @override
-  _GameScreenState createState() => _GameScreenState();
+  State<GameScreen> createState() => _GameScreenState();
 }
 
 class _GameScreenState extends State<GameScreen> {
   late SnakeGame game;
-  bool _paused = false;
-  String? _directionErrorMsg;
   Timer? _uiTick;
 
   @override
   void initState() {
     super.initState();
-    game = SnakeGame(
-      onDirectionError: _showDirectionError,
-    );
+  game = SnakeGame();
     // Tick l'UI fréquemment pour refléter les changements de l'état du jeu (gameOver, score, etc.)
     _uiTick = Timer.periodic(const Duration(milliseconds: 100), (_) {
       if (mounted) setState(() {});
@@ -51,25 +47,7 @@ class _GameScreenState extends State<GameScreen> {
     if (mounted) setState(() {});
   }
 
-  void _showDirectionError(String msg) {
-    setState(() {
-      _directionErrorMsg = msg;
-    });
-    Future.delayed(const Duration(seconds: 1), () {
-      if (mounted) {
-        setState(() {
-          _directionErrorMsg = null;
-        });
-      }
-    });
-  }
-
-  void _togglePause() {
-    setState(() {
-      _paused = !_paused;
-      game.gameStarted = !_paused;
-    });
-  }
+  // Pause removed
 
   @override
   void dispose() {
@@ -110,17 +88,7 @@ class _GameScreenState extends State<GameScreen> {
                     ],
                   ),
                 ),
-                Expanded(
-                  child: GestureDetector(
-                    onPanUpdate: (details) {
-                      game.handlePanUpdate(details);
-                    },
-                    onTapDown: (details) {
-                      game.handleTapDown(details);
-                    },
-                    child: GameWidget(game: game),
-                  ),
-                ),
+                Expanded(child: GameWidget(game: game)),
                 Container(
                   padding: const EdgeInsets.all(10),
                   child: Column(
@@ -129,11 +97,11 @@ class _GameScreenState extends State<GameScreen> {
                         mainAxisAlignment: MainAxisAlignment.spaceEvenly,
                         children: [
                           if (game.hasShield)
-                            Chip(label: Text('🛡️ ${game.shieldDuration.toStringAsFixed(1)}s'), backgroundColor: Colors.cyan.withOpacity(0.2)),
+                            Chip(label: Text('🛡️ ${game.shieldDuration.toStringAsFixed(1)}s'), backgroundColor: Colors.cyan.withValues(alpha: 0.2)),
                           if (game.hasMultiFood)
-                            Chip(label: Text('🍎x2 ${game.multiFoodDuration.toStringAsFixed(1)}s'), backgroundColor: Colors.orange.withOpacity(0.2)),
+                            Chip(label: Text('🍎x2 ${game.multiFoodDuration.toStringAsFixed(1)}s'), backgroundColor: Colors.orange.withValues(alpha: 0.2)),
                           if (game.speedMultiplier > 1.0)
-                            Chip(label: Text('⚡ x${game.speedMultiplier.toStringAsFixed(1)}'), backgroundColor: Colors.yellow.withOpacity(0.2)),
+                            Chip(label: Text('⚡ x${game.speedMultiplier.toStringAsFixed(1)}'), backgroundColor: Colors.yellow.withValues(alpha: 0.2)),
                         ],
                       ),
                       const SizedBox(height: 8),
@@ -142,10 +110,14 @@ class _GameScreenState extends State<GameScreen> {
                 ),
               ],
             ),
+            // Joystick flottant plein écran (sous les overlays)
+            _FloatingJoystick(
+              onChanged: (dx, dy) => game.setJoystickDelta(dx, dy),
+            ),
             // Overlays always on top
             if (game.showPowerUpSelection)
               Container(
-                color: Colors.black.withOpacity(0.8),
+                color: Colors.black.withValues(alpha: 0.8),
                 child: Center(
                   child: SingleChildScrollView(
                     child: Column(
@@ -186,7 +158,7 @@ class _GameScreenState extends State<GameScreen> {
             // Game Over overlay
             if (game.gameOver)
               Container(
-                color: Colors.black.withOpacity(0.7),
+                color: Colors.black.withValues(alpha: 0.7),
                 child: Center(
                   child: Column(
                     mainAxisSize: MainAxisSize.min,
@@ -202,7 +174,6 @@ class _GameScreenState extends State<GameScreen> {
                         onPressed: () {
                           setState(() {
                             game.resetGame();
-                            _paused = false;
                           });
                         },
                         style: ElevatedButton.styleFrom(backgroundColor: Colors.green, minimumSize: const Size(160, 50)),
@@ -212,37 +183,130 @@ class _GameScreenState extends State<GameScreen> {
                   ),
                 ),
               ),
-            // Pause button always visible
-            Positioned(
-              top: 10,
-              right: 10,
-              child: IconButton(
-                icon: Icon(_paused ? Icons.play_arrow : Icons.pause, color: Colors.white, size: 32),
-                tooltip: _paused ? 'Reprendre' : 'Pause',
-                onPressed: _togglePause,
-                splashRadius: 28,
-              ),
-            ),
-            // Error message always visible
-            if (_directionErrorMsg != null)
-              Positioned(
-                top: 60,
-                left: 0,
-                right: 0,
-                child: Center(
-                  child: Container(
-                    padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
-                    decoration: BoxDecoration(
-                      color: Colors.red.withOpacity(0.85),
-                      borderRadius: BorderRadius.circular(8),
-                    ),
-                    child: Text(_directionErrorMsg!, style: const TextStyle(color: Colors.white, fontSize: 16)),
-                  ),
-                ),
-              ),
+            // Pause button removed
+            // Message d'erreur de demi-tour retiré
           ],
         ),
       ),
     );
+  }
+}
+
+// Joystick flottant: spawn sous le doigt, suit le doigt s'il s'éloigne
+class _FloatingJoystick extends StatefulWidget {
+  final void Function(double dx, double dy) onChanged;
+  const _FloatingJoystick({required this.onChanged});
+
+  @override
+  State<_FloatingJoystick> createState() => _FloatingJoystickState();
+}
+
+class _FloatingJoystickState extends State<_FloatingJoystick> {
+  bool _active = false;
+  Offset _center = Offset.zero;
+  Offset _knob = Offset.zero;
+  final double _bgRadius = 56;
+  final double _knobRadius = 22;
+
+  double get _maxR => _bgRadius - _knobRadius;
+
+  void _start(Offset pos) {
+    setState(() {
+      _active = true;
+      _center = pos;
+      _knob = Offset.zero;
+    });
+    widget.onChanged(0, 0);
+  }
+
+  void _update(Offset pos) {
+    if (!_active) return;
+    final rel = pos - _center;
+    if (rel.distance <= _maxR) {
+      setState(() => _knob = rel);
+    } else {
+      final dir = rel / rel.distance;
+      // le centre suit le doigt, en gardant le knob au rayon max
+      final newKnob = dir * _maxR;
+      final newCenter = pos - newKnob;
+      setState(() {
+        _center = newCenter;
+        _knob = newKnob;
+      });
+    }
+    final dx = (_knob.dx / _maxR).clamp(-1.0, 1.0);
+    final dy = (_knob.dy / _maxR).clamp(-1.0, 1.0);
+    widget.onChanged(dx, dy);
+  }
+
+  void _end() {
+    if (!_active) return;
+    setState(() {
+      _active = false;
+      _knob = Offset.zero;
+    });
+    widget.onChanged(0, 0);
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return GestureDetector(
+      behavior: HitTestBehavior.translucent,
+      onPanStart: (d) {
+        final box = context.findRenderObject() as RenderBox;
+        _start(box.globalToLocal(d.globalPosition));
+      },
+      onPanUpdate: (d) {
+        final box = context.findRenderObject() as RenderBox;
+        _update(box.globalToLocal(d.globalPosition));
+      },
+      onPanEnd: (_) => _end(),
+      onPanCancel: () => _end(),
+      child: CustomPaint(
+        painter: _FloatingJoystickPainter(
+          active: _active,
+          center: _center,
+          knob: _knob,
+          bgRadius: _bgRadius,
+          knobRadius: _knobRadius,
+        ),
+        size: Size.infinite,
+      ),
+    );
+  }
+}
+
+class _FloatingJoystickPainter extends CustomPainter {
+  final bool active;
+  final Offset center;
+  final Offset knob;
+  final double bgRadius;
+  final double knobRadius;
+  _FloatingJoystickPainter({
+    required this.active,
+    required this.center,
+    required this.knob,
+    required this.bgRadius,
+    required this.knobRadius,
+  });
+
+  @override
+  void paint(Canvas canvas, Size size) {
+    if (!active) return;
+    final bg = Paint()..color = const Color(0x66000000);
+    final ring = Paint()
+      ..color = Colors.white.withValues(alpha: 0.3)
+      ..style = PaintingStyle.stroke
+      ..strokeWidth = 2;
+    final knobPaint = Paint()..color = const Color(0xFFEEEEEE).withValues(alpha: 0.9);
+
+    canvas.drawCircle(center, bgRadius, bg);
+    canvas.drawCircle(center, bgRadius, ring);
+    canvas.drawCircle(center + knob, knobRadius, knobPaint);
+  }
+
+  @override
+  bool shouldRepaint(covariant _FloatingJoystickPainter old) {
+    return old.active != active || old.center != center || old.knob != knob;
   }
 }
