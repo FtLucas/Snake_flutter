@@ -33,26 +33,255 @@ class MenuScreen extends StatelessWidget {
   Widget build(BuildContext context) {
     return Scaffold(
       backgroundColor: Colors.black,
-      body: Center(
-        child: Column(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            const Text('Snake Game', style: TextStyle(fontSize: 32, fontWeight: FontWeight.bold, color: Colors.white)),
-            const SizedBox(height: 24),
-            ElevatedButton(
-              style: ElevatedButton.styleFrom(minimumSize: const Size(220, 56)),
-              onPressed: () {
-                Navigator.of(context).push(
-                  MaterialPageRoute(builder: (_) => const GameScreen()),
-                );
-              },
-              child: const Text('Jouer'),
+      body: Stack(
+        children: [
+          const Positioned.fill(child: _MenuAnimatedBackground()),
+          // Contenu du menu au-dessus du fond
+          Positioned.fill(
+            child: Center(
+              child: Column(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  Container(
+                    padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
+                    decoration: BoxDecoration(
+                      color: Colors.black.withValues(alpha: 0.25),
+                      borderRadius: BorderRadius.circular(12),
+                    ),
+                    child: const Text('Snake Game', style: TextStyle(fontSize: 36, fontWeight: FontWeight.bold, color: Colors.white)),
+                  ),
+                  const SizedBox(height: 24),
+                  ElevatedButton(
+                    style: ElevatedButton.styleFrom(minimumSize: const Size(220, 56)),
+                    onPressed: () {
+                      Navigator.of(context).push(
+                        MaterialPageRoute(builder: (_) => const GameScreen()),
+                      );
+                    },
+                    child: const Text('Jouer'),
+                  ),
+                ],
+              ),
             ),
-          ],
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+class _MenuAnimatedBackground extends StatefulWidget {
+  const _MenuAnimatedBackground();
+
+  @override
+  State<_MenuAnimatedBackground> createState() => _MenuAnimatedBackgroundState();
+}
+
+class _MenuAnimatedBackgroundState extends State<_MenuAnimatedBackground> with SingleTickerProviderStateMixin {
+  late final AnimationController _ctrl;
+  Size _size = Size.zero;
+  late List<_Star> _stars;
+  late List<_Cloud> _clouds;
+
+  @override
+  void initState() {
+    super.initState();
+    _ctrl = AnimationController(vsync: this, duration: const Duration(seconds: 24))..addListener(() => setState(() {}))..repeat();
+    _stars = [];
+    _clouds = [];
+  }
+
+  @override
+  void didChangeDependencies() {
+    super.didChangeDependencies();
+    final size = MediaQuery.of(context).size;
+    if (size != _size && size.width > 0 && size.height > 0) {
+      _size = size;
+      _generateDecor(size);
+    }
+  }
+
+  void _generateDecor(Size s) {
+    // étoiles
+    final rng = Random(42);
+    final int starCount = (80 + s.width / 10).clamp(80, 160).toInt();
+    _stars = List.generate(starCount, (i) {
+      return _Star(
+        Offset(rng.nextDouble() * s.width, rng.nextDouble() * (s.height * 0.6)),
+        0.4 + rng.nextDouble() * 0.6,
+        0.5 + rng.nextDouble() * 1.2,
+        0.5 + rng.nextDouble() * 1.5,
+      );
+    });
+    // nuages (jour)
+  const int seedClouds = 99;
+  final rng2 = Random(seedClouds);
+  const int cloudCount = 6;
+    _clouds = List.generate(cloudCount, (i) {
+      return _Cloud(
+        Offset(rng2.nextDouble() * s.width, (s.height * 0.18) + rng2.nextDouble() * (s.height * 0.22)),
+        0.8 + rng2.nextDouble() * 0.8,
+        8 + rng2.nextDouble() * 16,
+      );
+    });
+  }
+
+  @override
+  void dispose() {
+    _ctrl.dispose();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    if (_size == Size.zero) return const SizedBox.shrink();
+    final t = _ctrl.value; // 0..1
+    return RepaintBoundary(
+      child: CustomPaint(
+        painter: _MenuBackgroundPainter(
+          time: t,
+          stars: _stars,
+          clouds: _clouds,
         ),
       ),
     );
   }
+}
+
+class _MenuBackgroundPainter extends CustomPainter {
+  final double time; // 0..1
+  final List<_Star> stars;
+  final List<_Cloud> clouds;
+  _MenuBackgroundPainter({required this.time, required this.stars, required this.clouds});
+
+  @override
+  void paint(Canvas canvas, Size size) {
+    // Cycle jour/nuit: 0..0.5 jour, 0.5..1.0 nuit
+  final bool isNight = time >= 0.5;
+  final double phase = isNight ? (time - 0.5) * 2.0 : time * 2.0; // 0..1
+  final double dayAlpha = isNight ? (1.0 - phase) : 1.0;
+
+    // Ciel: gradient selon jour/nuit
+    final Rect sky = Offset.zero & size;
+    final Paint skyPaint = Paint()
+      ..shader = LinearGradient(
+        begin: Alignment.topCenter,
+        end: Alignment.bottomCenter,
+        colors: isNight
+            ? [const Color(0xFF0B1022), const Color(0xFF111A35), const Color(0xFF1E2748)]
+            : [const Color(0xFF64B5F6), const Color(0xFF90CAF9), const Color(0xFFE3F2FD)],
+        stops: const [0.0, 0.5, 1.0],
+      ).createShader(sky);
+    canvas.drawRect(sky, skyPaint);
+
+    // Soleil/Lune (simple trajectoire en arc)
+    final double cx = size.width * 0.5;
+    final double cy = size.height * 0.15;
+    final double rx = size.width * 0.45;
+    final double ry = size.height * 0.22;
+
+    // angle jour 0..pi, nuit pi..2pi
+    final double angle = isNight ? (pi + phase * pi) : (phase * pi);
+    final Offset sunPos = Offset(cx - rx * cos(angle), cy + ry * sin(angle));
+    final Offset moonPos = Offset(cx - rx * cos(angle + pi), cy + ry * sin(angle + pi));
+
+    // Soleil
+    if (!isNight || dayAlpha > 0.05) {
+      final Paint sun = Paint()
+        ..shader = RadialGradient(
+          colors: [
+            const Color(0xFFFFF59D).withValues(alpha: 0.9 * dayAlpha),
+            const Color(0xFFFFEE58).withValues(alpha: 0.7 * dayAlpha),
+            const Color(0x00FFFFFF),
+          ],
+          stops: const [0.0, 0.4, 1.0],
+        ).createShader(Rect.fromCircle(center: sunPos, radius: 70));
+      canvas.drawCircle(sunPos, 70, sun);
+      canvas.drawCircle(sunPos, 26, Paint()..color = const Color(0xFFFFF176).withValues(alpha: 0.95 * dayAlpha));
+    }
+
+    // Lune
+    if (isNight) {
+      final Paint moon = Paint()
+        ..shader = RadialGradient(
+          colors: [
+            const Color(0xFFCFD8DC).withValues(alpha: 0.9),
+            const Color(0xFFB0BEC5).withValues(alpha: 0.6),
+            const Color(0x00FFFFFF),
+          ],
+          stops: const [0.0, 0.4, 1.0],
+        ).createShader(Rect.fromCircle(center: moonPos, radius: 60));
+      canvas.drawCircle(moonPos, 60, moon);
+      // cratères simples
+      final Paint crater = Paint()..color = const Color(0xFF90A4AE).withValues(alpha: 0.5);
+      for (int i = 0; i < 8; i++) {
+        final double a = i / 8.0 * pi * 2;
+        final Offset p = moonPos + Offset(cos(a), sin(a)) * 24;
+        canvas.drawCircle(p, 5 + 3 * sin(a * 2), crater);
+      }
+    }
+
+    // Étoiles (nuit uniquement)
+    if (isNight) {
+      for (final s in stars) {
+        final double tw = 0.6 + 0.4 * (0.5 + 0.5 * sin((time * 6.283) * s.twinkle + s.twinkle));
+        final double a = (0.15 + 0.85 * tw) * s.baseAlpha;
+        final Paint p = Paint()..color = Colors.white.withValues(alpha: a * 0.9);
+        canvas.drawCircle(s.pos, s.radius, p);
+      }
+    }
+
+    // Nuages (jour uniquement)
+    if (!isNight) {
+      for (final c in clouds) {
+        final double x = (c.pos.dx + (time * c.speed * 40)) % (size.width + 160) - 80;
+        final double y = c.pos.dy;
+        _drawCloud(canvas, Offset(x, y), c.scale);
+      }
+    }
+
+    // Bande sol/ligne d'horizon douce
+    final double horizon = size.height * 0.72;
+    final Rect ground = Rect.fromLTRB(0, horizon, size.width, size.height);
+    final Paint groundPaint = Paint()
+      ..shader = const LinearGradient(
+        begin: Alignment.topCenter,
+        end: Alignment.bottomCenter,
+        colors: [Color(0xFF3E2723), Color(0xFF2B1B16)],
+      ).createShader(ground);
+    canvas.drawRect(ground, groundPaint);
+    canvas.drawRect(Rect.fromLTRB(0, horizon - 2, size.width, horizon), Paint()..color = Colors.black.withValues(alpha: 0.2));
+  }
+
+  void _drawCloud(Canvas canvas, Offset pos, double scale) {
+    final Paint p = Paint()..color = const Color(0xFFFFFFFF).withValues(alpha: 0.85);
+    void bub(Offset o, double r) => canvas.drawCircle(pos + o * scale, r * scale, p);
+    bub(const Offset(0, 0), 24);
+    bub(const Offset(20, 0), 20);
+    bub(const Offset(-18, 4), 18);
+    bub(const Offset(8, -8), 16);
+    bub(const Offset(-6, -6), 14);
+  }
+
+  @override
+  bool shouldRepaint(covariant _MenuBackgroundPainter old) {
+    return old.time != time || old.stars != stars || old.clouds != clouds;
+  }
+}
+
+class _Star {
+  final Offset pos;
+  final double baseAlpha;
+  final double twinkle; // vitesse twinkle
+  final double radius;
+  _Star(this.pos, this.baseAlpha, this.twinkle, this.radius);
+}
+
+class _Cloud {
+  final Offset pos;
+  final double scale;
+  final double speed;
+  _Cloud(this.pos, this.scale, this.speed);
 }
 
 class GameScreen extends StatefulWidget {
