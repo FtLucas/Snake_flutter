@@ -89,7 +89,19 @@ class _GameScreenState extends State<GameScreen> {
                     ],
                   ),
                 ),
-                Expanded(child: GameWidget(game: game)),
+                // Zone de jeu avec joystick par-dessus uniquement cette zone
+                Expanded(
+                  child: Stack(
+                    children: [
+                      GameWidget(game: game),
+                      Positioned.fill(
+                        child: _FloatingJoystick(
+                          onChanged: (dx, dy) => game.setJoystickDelta(dx, dy),
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
                 Container(
                   padding: const EdgeInsets.all(10),
                   child: Column(
@@ -153,10 +165,7 @@ class _GameScreenState extends State<GameScreen> {
                 ),
               ],
             ),
-            // Joystick flottant plein écran (sous les overlays)
-            _FloatingJoystick(
-              onChanged: (dx, dy) => game.setJoystickDelta(dx, dy),
-            ),
+            // Joystick déplacé au-dessus de la zone de jeu uniquement (voir plus haut)
             // Overlays always on top
             if (game.showPowerUpSelection)
               Container(
