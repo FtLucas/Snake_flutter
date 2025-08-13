@@ -114,11 +114,12 @@ class EnemyComponent extends PositionComponent {
   bool _headHitsAnt(Vector2 headCenter, double headRadius) {
     final r = enemy.size;
     // local offsets used in render
-    final Offset abdomen = Offset(-r * 0.9, 0);
-    final Offset thorax = Offset(0, 0);
-    final Offset antHead = Offset(r * 0.95, 0);
-    final radii = <double>[r * 0.85, r * 0.7, r * 0.5];
-    final locals = <Offset>[abdomen, thorax, antHead];
+  final Offset abdomen = Offset(-r * 0.9, 0);
+  final Offset thorax = Offset.zero;
+  final Offset antHead = Offset(r * 0.95, 0);
+  const List<double> radiiMul = [0.85, 0.7, 0.5];
+  final List<double> radii = [for (final m in radiiMul) r * m];
+  final List<Offset> locals = [abdomen, thorax, antHead];
     // orientation: treat direction as (cos,sin) on unit circle; default to +X
     final dir = enemy.direction.length2 > 0 ? enemy.direction.normalized() : Vector2(1, 0);
     final double cosA = dir.x;
@@ -371,10 +372,10 @@ class EnemyComponent extends PositionComponent {
     canvas.rotate(ang);
 
     // Spherical body pieces with radial gradients
-    Color _mix(Color a, Color b, double t) => Color.lerp(a, b, t)!;
-    Paint _sphere(Color base, Offset center, double rad) {
-  final lighter = _mix(base, Colors.white, 0.35 * gameRef.lightIntensity);
-  final darker = _mix(base, Colors.black, 0.25 * gameRef.lightIntensity);
+    Color mixColor(Color a, Color b, double t) => Color.lerp(a, b, t)!;
+    Paint spherePaint(Color base, Offset center, double rad) {
+  final lighter = mixColor(base, Colors.white, 0.35 * gameRef.lightIntensity);
+  final darker = mixColor(base, Colors.black, 0.25 * gameRef.lightIntensity);
       final lightOffset = Offset(-gameRef.lightDir.dx * rad * 0.6, -gameRef.lightDir.dy * rad * 0.6);
       return Paint()..shader = ui.Gradient.radial(center + lightOffset, rad, [lighter, base, darker], [0.0, 0.55, 1.0]);
     }
@@ -393,9 +394,9 @@ class EnemyComponent extends PositionComponent {
     final abdomen = Offset(-r * 0.9, 0);
     final thorax = Offset(0, 0);
     final head = Offset(r * 0.95, 0);
-    canvas.drawCircle(abdomen, r * 0.85, _sphere(base, abdomen, r * 0.85));
-    canvas.drawCircle(thorax, r * 0.7, _sphere(base, thorax, r * 0.7));
-    canvas.drawCircle(head, r * 0.5, _sphere(base, head, r * 0.5));
+  canvas.drawCircle(abdomen, r * 0.85, spherePaint(base, abdomen, r * 0.85));
+  canvas.drawCircle(thorax, r * 0.7, spherePaint(base, thorax, r * 0.7));
+  canvas.drawCircle(head, r * 0.5, spherePaint(base, head, r * 0.5));
 
     // legs (3 pairs)
     final stroke = Paint()
@@ -458,22 +459,26 @@ class EnemyComponent extends PositionComponent {
       final double y = -enemy.size - 10.0;
       final Rect bg = Rect.fromCenter(center: Offset(0, y), width: bw, height: bh);
       final Paint bgPaint = Paint()..color = Colors.black.withValues(alpha: 0.5);
-      canvas.drawRRect(RRect.fromRectAndRadius(bg, const Radius.circular(2)), bgPaint);
+  canvas.drawRRect(RRect.fromRectAndRadius(bg, const Radius.circular(2)), bgPaint);
       // bar color by health
       Color fc;
-      if (pct > 0.5) fc = const Color(0xFF66BB6A);
-      else if (pct > 0.25) fc = const Color(0xFFFFEE58);
-      else fc = const Color(0xFFE53935);
+      if (pct > 0.5) {
+        fc = const Color(0xFF66BB6A);
+      } else if (pct > 0.25) {
+        fc = const Color(0xFFFFEE58);
+      } else {
+        fc = const Color(0xFFE53935);
+      }
       final double fw = bw * pct;
       final Rect fg = Rect.fromLTWH(bg.left, bg.top, fw, bh);
       final Paint fgPaint = Paint()..color = fc;
-      canvas.drawRRect(RRect.fromRectAndRadius(fg, const Radius.circular(2)), fgPaint);
+  canvas.drawRRect(RRect.fromRectAndRadius(fg, const Radius.circular(2)), fgPaint);
       // optional thin border
       final Paint border = Paint()
         ..color = Colors.black.withValues(alpha: 0.6)
         ..style = PaintingStyle.stroke
         ..strokeWidth = 0.8;
-      canvas.drawRRect(RRect.fromRectAndRadius(bg, const Radius.circular(2)), border);
+  canvas.drawRRect(RRect.fromRectAndRadius(bg, const Radius.circular(2)), border);
     }
   }
 }
@@ -631,9 +636,9 @@ class SnakeGame extends FlameGame {
   Offset _anthillMouth = Offset.zero;
   double _anthillWidth = 44.0;
   // debug: show only anthill (no soil/rocks) to validate its shape
-  bool _debugAnthillOnly = false; // re-enable soil/rocks
+  final bool _debugAnthillOnly = false; // re-enable soil/rocks
   // toggle anthill visibility and spawns
-  bool _showAnthill = false;
+  final bool _showAnthill = false;
   final List<_Chamber> _anthillChambers = [];
   // Sky decor
   final List<_Cloud> _clouds = [];
@@ -745,14 +750,14 @@ class SnakeGame extends FlameGame {
   // Place 6 chambers at different depths/positions
   double w = soil.width; double h = soil.height;
   Offset P(double px, double py) => Offset(soil.left + w * px, soil.top + h * py);
-  double RX(double f) => max(26.0, h * f);
-  double RY(double f) => max(18.0, h * f * 0.75);
-  _anthillChambers.add(_Chamber(P(0.26, 0.20), RX(0.10), RY(0.095)));
-  _anthillChambers.add(_Chamber(P(0.60, 0.26), RX(0.11), RY(0.095)));
-  _anthillChambers.add(_Chamber(P(0.28, 0.48), RX(0.14), RY(0.11)));
-  _anthillChambers.add(_Chamber(P(0.76, 0.54), RX(0.13), RY(0.10)));
-  _anthillChambers.add(_Chamber(P(0.54, 0.74), RX(0.12), RY(0.095)));
-  _anthillChambers.add(_Chamber(P(0.34, 0.80), RX(0.115), RY(0.09)));
+  double rx(double f) => max(26.0, h * f);
+  double ry(double f) => max(18.0, h * f * 0.75);
+  _anthillChambers.add(_Chamber(P(0.26, 0.20), rx(0.10), ry(0.095)));
+  _anthillChambers.add(_Chamber(P(0.60, 0.26), rx(0.11), ry(0.095)));
+  _anthillChambers.add(_Chamber(P(0.28, 0.48), rx(0.14), ry(0.11)));
+  _anthillChambers.add(_Chamber(P(0.76, 0.54), rx(0.13), ry(0.10)));
+  _anthillChambers.add(_Chamber(P(0.54, 0.74), rx(0.12), ry(0.095)));
+  _anthillChambers.add(_Chamber(P(0.34, 0.80), rx(0.115), ry(0.09)));
   }
 
   // Called from Flutter overlay to feed joystick input
@@ -1624,9 +1629,9 @@ class SnakeGame extends FlameGame {
         ..shader = ui.Gradient.linear(
           Offset(sky.left, sky.bottom),
           Offset(sky.left, sky.top),
-          [
-            const Color(0xFF2196F3),
-            const Color(0xFFBBDEFB),
+          const [
+            Color(0xFF2196F3),
+            Color(0xFFBBDEFB),
           ],
           [0.0, 1.0],
         );
@@ -1637,9 +1642,9 @@ class SnakeGame extends FlameGame {
         ..shader = ui.Gradient.linear(
           Offset(sky.left, sky.bottom),
           Offset(sky.left, sky.top),
-          [
-            const Color(0xFF000000),
-            const Color(0xFF061126),
+          const [
+            Color(0xFF000000),
+            Color(0xFF061126),
           ],
           [0.0, 1.0],
         );
@@ -1684,7 +1689,7 @@ class SnakeGame extends FlameGame {
             soil.topLeft,
             soil.bottomLeft,
             [topSoil, botSoil],
-            [0.0, 1.0],
+            const [0.0, 1.0],
           );
         canvas.drawRect(soil, soilPaint);
         // Add subtle, slightly wavy strata lines for organic feel
@@ -1698,7 +1703,7 @@ class SnakeGame extends FlameGame {
           double phase = ((y - soil.top) * 0.12);
           const double amp = 1.8; // px
           const double freq = 2 * pi / 120.0; // cycles per 120px
-          final double step = 16.0;
+          const double step = 16.0;
           wave.moveTo(soil.left, y);
           for (double x = soil.left + step; x <= soil.right; x += step) {
             final double yp = y + sin((x * freq) + phase) * amp;
@@ -1745,7 +1750,7 @@ class SnakeGame extends FlameGame {
             contact.topLeft,
             contact.bottomLeft,
             [Colors.black.withValues(alpha: 0.35), Colors.transparent],
-            [0.0, 1.0],
+            const [0.0, 1.0],
           );
         canvas.drawRect(contact, contactPaint);
       }
@@ -1830,10 +1835,10 @@ class SnakeGame extends FlameGame {
         ..shader = ui.Gradient.radial(
           sp,
           sunR * 3.0,
-          [
-            const Color(0xFFFFF59D).withValues(alpha: 0.35 * lightIntensity),
-            Colors.transparent,
-          ],
+            [
+              const Color(0xFFFFF59D).withValues(alpha: 0.35 * lightIntensity),
+              Colors.transparent,
+            ],
           [0.0, 1.0],
         );
       canvas.drawCircle(sp, sunR * 3.0, halo);
@@ -1842,8 +1847,8 @@ class SnakeGame extends FlameGame {
         ..shader = ui.Gradient.radial(
           sp,
           sunR,
-          [const Color(0xFFFFF176), const Color(0xFFFFEE58), const Color(0xFFFFC107)],
-          [0.0, 0.6, 1.0],
+          const [Color(0xFFFFF176), Color(0xFFFFEE58), Color(0xFFFFC107)],
+          const [0.0, 0.6, 1.0],
         );
       canvas.drawCircle(sp, sunR, sunPaint);
     }
@@ -2035,14 +2040,14 @@ class SnakeGame extends FlameGame {
   canvas.drawOval(shadowOval, Paint()..color = Colors.black.withValues(alpha: 0.22 * lightIntensity));
     }
     // Sphères avec dégradé radial
-    Color _mix(Color a, Color b, double t) => Color.lerp(a, b, t)!;
+  Color mixColor2(Color a, Color b, double t) => Color.lerp(a, b, t)!;
     for (int i = _segmentCenters.length - 1; i >= 0; i--) {
       final c = _segmentCenters[i];
       final base = hasShield
           ? (i == 0 ? Colors.lightBlue : Colors.cyan)
           : (i == 0 ? Colors.lightGreen : Colors.green);
-      final lighter = _mix(base, Colors.white, 0.35);
-      final darker = _mix(base, Colors.black, 0.25);
+  final lighter = mixColor2(base, Colors.white, 0.35);
+  final darker = mixColor2(base, Colors.black, 0.25);
       final center = Offset(c.x, c.y);
       final lightOffset = Offset(-lightDir.dx * r * 0.6, -lightDir.dy * r * 0.6);
       final shader = ui.Gradient.radial(
