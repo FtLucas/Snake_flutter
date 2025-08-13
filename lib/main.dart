@@ -1,6 +1,7 @@
 // lib/main.dart
 import 'dart:async';
 import 'package:flutter/material.dart';
+import 'dart:math';
 import 'package:flame/game.dart';
 import 'snake_game.dart';
 
@@ -93,6 +94,48 @@ class _GameScreenState extends State<GameScreen> {
                   padding: const EdgeInsets.all(10),
                   child: Column(
                     children: [
+                      // Bandeau debug compact
+                      Row(
+                        mainAxisAlignment: MainAxisAlignment.center,
+                        children: [
+                          FilterChip(
+                            selected: game.demoMode,
+                            label: const Text('Démo'),
+                            onSelected: (_) {
+                              setState(() => game.demoMode = !game.demoMode);
+                            },
+                          ),
+                          const SizedBox(width: 8),
+                          ElevatedButton(
+                            onPressed: () {
+                              game.wave = max(0, game.wave - (game.wave % 5)); // aligne sur cycle
+                              game.waveBreakTimer = 0; // démarre prochaine vague
+                            },
+                            child: const Text('Vague++'),
+                          ),
+                          const SizedBox(width: 8),
+                          ElevatedButton(
+                            onPressed: () {
+                              if (!game.bossActive) {
+                                game.wave = (game.wave ~/ 5) * 5 + 5; // saute au palier boss
+                                game.waveBreakTimer = 0;
+                              }
+                            },
+                            child: const Text('Boss'),
+                          ),
+                          const SizedBox(width: 8),
+                          ElevatedButton(
+                            onPressed: () {
+                              setState(() {
+                                game.isNight = !game.isNight;
+                                game.nightOpacity = game.isNight ? 1.0 : 0.0;
+                              });
+                            },
+                            child: const Text('Jour/Nuit'),
+                          ),
+                        ],
+                      ),
+                      const SizedBox(height: 6),
                       Row(
                         mainAxisAlignment: MainAxisAlignment.spaceEvenly,
                         children: [

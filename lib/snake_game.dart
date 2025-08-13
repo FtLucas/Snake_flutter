@@ -586,6 +586,10 @@ class SnakeGame extends FlameGame {
   bool bossActive = false;
   EnemyComponent? currentBoss;
 
+  // Demo/Debug
+  bool demoMode = false; // auto-pilote pour valider sans jouer
+  double demoTimeScale = 2.5; // accélération des timers en mode démo
+
   // powerups
   bool hasShield = false;
   double shieldDuration = 0.0;
@@ -1204,12 +1208,39 @@ class SnakeGame extends FlameGame {
   @override
   void update(double dt) {
     super.update(dt);
-    if (!gameStarted || gameOver || showPowerUpSelection) return;
+  if (!gameStarted || gameOver || showPowerUpSelection) return;
+
+  // Accélération légère des timers en mode démo (n'affecte pas la physique de collision)
+  final double tScale = demoMode ? demoTimeScale : 1.0;
 
     // Joystick input (from Flutter) -> analog direction (normalized)
     final joy = _joystickDelta;
-    if (joy != null && joy.length > _joystickDeadZone) {
-      nextDirection = joy.normalized();
+    if (!demoMode) {
+      if (joy != null && joy.length > _joystickDeadZone) {
+        nextDirection = joy.normalized();
+      }
+    } else {
+      // Auto-pilote simple: va vers la pomme, évite les bords
+      final headCenter = _headPixel + Vector2(gridSize / 2, gridSize / 2);
+      Vector2 target;
+      if (food != null) {
+        target = Vector2(
+          playOrigin.x + food!.x * gridSize + gridSize / 2,
+          playOrigin.y + food!.y * gridSize + gridSize / 2,
+        );
+      } else {
+        target = Vector2(playOrigin.x + playSize.x / 2, playOrigin.y + playSize.y / 2);
+      }
+      Vector2 steer = (target - headCenter);
+      // évite les bords: repoussement si proche
+      const double margin = 30.0;
+      if (headCenter.x < playRect.left + margin) steer += Vector2(60, 0);
+      if (headCenter.x > playRect.right - margin) steer += Vector2(-60, 0);
+      if (headCenter.y < playRect.top + margin) steer += Vector2(0, 60);
+      if (headCenter.y > playRect.bottom - margin) steer += Vector2(0, -60);
+      if (steer.length2 > 0) {
+        nextDirection = steer.normalized();
+      }
     }
 
   // Continuous movement
@@ -1225,13 +1256,13 @@ class SnakeGame extends FlameGame {
 
     // Update power-up timers
     if (hasShield) {
-      shieldDuration -= dt;
+      shieldDuration -= dt * tScale;
       if (shieldDuration <= 0) {
         hasShield = false;
       }
     }
     if (hasMultiFood) {
-      multiFoodDuration -= dt;
+      multiFoodDuration -= dt * tScale;
       if (multiFoodDuration <= 0) {
         hasMultiFood = false;
       }
@@ -1240,12 +1271,12 @@ class SnakeGame extends FlameGame {
   // Night fade in/out
     if (bossActive) {
       // fade to full night while boss is alive
-      nightOpacity += dt / 1.0; // ~1s fade-in
+      nightOpacity += (dt * tScale) / 1.0; // ~1s fade-in (accéléré en démo)
       if (nightOpacity > 1.0) nightOpacity = 1.0;
       isNight = true;
     } else if (isNight) {
       // fade back to day after boss
-      nightOpacity -= dt / 1.2; // ~1.2s fade-out
+      nightOpacity -= (dt * tScale) / 1.2; // ~1.2s fade-out (accéléré en démo)
       if (nightOpacity <= 0) {
         nightOpacity = 0;
         isNight = false;
@@ -1256,7 +1287,7 @@ class SnakeGame extends FlameGame {
     if (bossActive) {
       // no wave progression or spawns while boss is alive
     } else if (!waveActive) {
-      waveBreakTimer -= dt;
+      waveBreakTimer -= dt * tScale;
       if (waveBreakTimer <= 0) {
         wave += 1;
         if (wave % 5 == 0) {
@@ -1297,7 +1328,7 @@ class SnakeGame extends FlameGame {
       }
     } else {
       // active regular wave: spawn enemies until done
-      spawnTimerInWave -= dt;
+  spawnTimerInWave -= dt * tScale;
       if (spawnTimerInWave <= 0 && waveRemaining > 0) {
         _spawnEnemy();
         waveRemaining--;
@@ -1310,7 +1341,7 @@ class SnakeGame extends FlameGame {
         waveBreakTimer = waveBreakFixed;
       }
       // Track elapsed time within the wave for sun progress
-      waveElapsed += dt;
+  waveElapsed += dt * tScale;
       // Advance sun progress towards the target proportionally to wave progress
       if (wave % 5 != 0) {
         final double t = (waveElapsed / waveDurationTarget).clamp(0.0, 1.0);
