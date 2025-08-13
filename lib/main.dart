@@ -20,8 +20,37 @@ class MyApp extends StatelessWidget {
         primarySwatch: Colors.green,
         brightness: Brightness.dark,
       ),
-      home: const GameScreen(),
+      home: const MenuScreen(),
       debugShowCheckedModeBanner: false,
+    );
+  }
+}
+
+class MenuScreen extends StatelessWidget {
+  const MenuScreen({super.key});
+
+  @override
+  Widget build(BuildContext context) {
+    return Scaffold(
+      backgroundColor: Colors.black,
+      body: Center(
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            const Text('Snake Game', style: TextStyle(fontSize: 32, fontWeight: FontWeight.bold, color: Colors.white)),
+            const SizedBox(height: 24),
+            ElevatedButton(
+              style: ElevatedButton.styleFrom(minimumSize: const Size(220, 56)),
+              onPressed: () {
+                Navigator.of(context).push(
+                  MaterialPageRoute(builder: (_) => const GameScreen()),
+                );
+              },
+              child: const Text('Jouer'),
+            ),
+          ],
+        ),
+      ),
     );
   }
 }
