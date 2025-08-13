@@ -115,7 +115,7 @@ class EnemyComponent extends PositionComponent {
     final r = enemy.size;
     // local offsets used in render
   final Offset abdomen = Offset(-r * 0.9, 0);
-  final Offset thorax = Offset.zero;
+  const Offset thorax = Offset.zero;
   final Offset antHead = Offset(r * 0.95, 0);
   const List<double> radiiMul = [0.85, 0.7, 0.5];
   final List<double> radii = [for (final m in radiiMul) r * m];
@@ -172,7 +172,7 @@ class EnemyComponent extends PositionComponent {
           break;
         case EnemyClass.antHealer:
           // Backline behavior: keep distance from player, drift toward allies
-          final desired = healerPreferred;
+          const desired = healerPreferred;
           Vector2 move = Vector2.zero();
           if (dist < desired) {
             // too close: move away from player
@@ -391,8 +391,8 @@ class EnemyComponent extends PositionComponent {
         ..strokeWidth = 2.0;
       canvas.drawCircle(const Offset(0, 0), auraR, aura);
     }
-    final abdomen = Offset(-r * 0.9, 0);
-    final thorax = Offset(0, 0);
+  final abdomen = Offset(-r * 0.9, 0);
+  const thorax = Offset(0, 0);
     final head = Offset(r * 0.95, 0);
   canvas.drawCircle(abdomen, r * 0.85, spherePaint(base, abdomen, r * 0.85));
   canvas.drawCircle(thorax, r * 0.7, spherePaint(base, thorax, r * 0.7));
@@ -720,7 +720,7 @@ class SnakeGame extends FlameGame {
     }
 
     // Grain specks: precompute light/dark tiny dots, avoid the top 4px under the grass edge
-    final double marginTop = 4.0;
+  const double marginTop = 4.0;
     final Rect soilGrainArea = Rect.fromLTWH(soil.left, soil.top + marginTop, soil.width, max(0.0, soil.height - marginTop));
     if (soilGrainArea.height > 0 && soilGrainArea.width > 0) {
       // Counts proportional to area, clamped to a reasonable range
@@ -1898,7 +1898,7 @@ class SnakeGame extends FlameGame {
         final Offset toSun = (Offset(_sunPos.dx, _sunPos.dy) - mp);
         final double ang = atan2(toSun.dy, toSun.dx);
         final Paint rim = Paint()..color = Colors.white.withValues(alpha: 0.18);
-        final int steps = 14;
+  const int steps = 14;
         for (int i = 0; i <= steps; i++) {
           final double t = i / steps;
           final double a0 = ang - pi * 0.2;
