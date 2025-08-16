@@ -4,7 +4,7 @@
 		{
 			"label": "Flutter Clean & Run",
 			"type": "shell",
-			"command": "${workspaceFolder}/snake_game/run_flutter.bat",
+			"command": "${workspaceFolder}/Snake_flutter/run_flutter.bat",
 			"isBackground": false,
 			"problemMatcher": [],
 			"group": "build"

@@ -106,9 +106,11 @@ class _GameScreenState extends State<GameScreen> {
                   padding: const EdgeInsets.all(10),
                   child: Column(
                     children: [
-                      // Bandeau debug compact
-                      Row(
-                        mainAxisAlignment: MainAxisAlignment.center,
+                      // Bandeau debug compact (Wrap pour éviter les overflows sur petits écrans)
+                      Wrap(
+                        alignment: WrapAlignment.center,
+                        spacing: 8,
+                        runSpacing: 8,
                         children: [
                           FilterChip(
                             selected: game.demoMode,
@@ -117,7 +119,6 @@ class _GameScreenState extends State<GameScreen> {
                               setState(() => game.demoMode = !game.demoMode);
                             },
                           ),
-                          const SizedBox(width: 8),
                           ElevatedButton(
                             onPressed: () {
                               game.wave = max(0, game.wave - (game.wave % 5)); // aligne sur cycle
@@ -125,7 +126,6 @@ class _GameScreenState extends State<GameScreen> {
                             },
                             child: const Text('Vague++'),
                           ),
-                          const SizedBox(width: 8),
                           ElevatedButton(
                             onPressed: () {
                               if (!game.bossActive) {
@@ -135,7 +135,6 @@ class _GameScreenState extends State<GameScreen> {
                             },
                             child: const Text('Boss'),
                           ),
-                          const SizedBox(width: 8),
                           ElevatedButton(
                             onPressed: () {
                               setState(() {
