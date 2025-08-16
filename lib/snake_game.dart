@@ -692,10 +692,8 @@ class SnakeGame extends FlameGame {
     await _generateGrassTile();
     _generateSoilDecor();
   _computeAnthill();
-    _initializePowerUps();
-    _initializeGame();
-    _startGameLoop();
-  _startEnemySpawning(); // disabled in favor of waves (kept for compatibility)
+  _initializePowerUps();
+  // Ne pas démarrer la partie automatiquement; le menu contrôlera resetGame()
   }
 
   void _generateSoilDecor() {
@@ -918,8 +916,8 @@ class SnakeGame extends FlameGame {
     foodEaten = 0;
     experience = 0;
     experienceToNextLevel = 10;
-    gameOver = false;
-    gameStarted = true;
+  gameOver = false;
+  gameStarted = false; // sera mis à jour par resetGame()
     showPowerUpSelection = false;
 
     hasShield = false;
@@ -1644,6 +1642,7 @@ class SnakeGame extends FlameGame {
     _initializeGame();
     _startGameLoop();
   _startEnemySpawning();
+  gameStarted = true;
   }
 
   /// Dessine le jeu (grille, serpent, nourriture, ennemis, UI overlay)

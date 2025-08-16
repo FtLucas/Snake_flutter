@@ -4,6 +4,7 @@ import 'package:flutter/material.dart';
 import 'dart:math';
 import 'package:flame/game.dart';
 import 'snake_game.dart';
+import 'ui/main_menu_overlay.dart';
 
 void main() {
   runApp(const MyApp());
@@ -40,12 +41,17 @@ class _GameScreenState extends State<GameScreen> {
   @override
   void initState() {
     super.initState();
-  game = SnakeGame();
+    game = SnakeGame();
     // Tick l'UI fréquemment pour refléter les changements de l'état du jeu (gameOver, score, etc.)
     _uiTick = Timer.periodic(const Duration(milliseconds: 100), (_) {
       if (mounted) setState(() {});
     });
-    if (mounted) setState(() {});
+    // Afficher le menu principal au démarrage
+    // On retire un éventuel overlay précédent pour éviter les doublons
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      game.overlays.add('MainMenu');
+      if (mounted) setState(() {});
+    });
   }
 
   // Pause removed
@@ -93,7 +99,12 @@ class _GameScreenState extends State<GameScreen> {
                 Expanded(
                   child: Stack(
                     children: [
-                      GameWidget(game: game),
+                      GameWidget(
+                        game: game,
+                        overlayBuilderMap: {
+                          'MainMenu': (context, game) => MainMenuOverlay(game: this.game),
+                        },
+                      ),
                       Positioned.fill(
                         child: _FloatingJoystick(
                           onChanged: (dx, dy) => game.setJoystickDelta(dx, dy),
