@@ -3,10 +3,21 @@ import 'dart:async';
 import 'package:flutter/material.dart';
 import 'dart:math';
 import 'package:flame/game.dart';
+import 'package:flutter/services.dart';
 import 'snake_game.dart';
-import 'ui/main_menu_overlay.dart';
+import 'ui/home_menu_screen.dart';
+import 'ui/shop_screen.dart';
+import 'ui/skill_tree_screen.dart';
 
 void main() {
+  WidgetsFlutterBinding.ensureInitialized();
+  SystemChrome.setEnabledSystemUIMode(SystemUiMode.immersiveSticky);
+  SystemChrome.setSystemUIOverlayStyle(const SystemUiOverlayStyle(
+    statusBarColor: Colors.transparent,
+    systemNavigationBarColor: Colors.transparent,
+    statusBarIconBrightness: Brightness.light,
+    systemNavigationBarIconBrightness: Brightness.light,
+  ));
   runApp(const MyApp());
 }
 
@@ -18,10 +29,16 @@ class MyApp extends StatelessWidget {
     return MaterialApp(
       title: 'Snake Game',
       theme: ThemeData(
-        primarySwatch: Colors.green,
-        brightness: Brightness.dark,
+        colorScheme: ColorScheme.fromSeed(seedColor: Colors.green, brightness: Brightness.dark),
+        useMaterial3: true,
       ),
-      home: const GameScreen(),
+      initialRoute: '/',
+      routes: {
+        '/': (context) => const HomeMenuScreen(),
+        '/game': (context) => const GameScreen(),
+        '/shop': (context) => const ShopScreen(),
+        '/skills': (context) => const SkillTreeScreen(),
+      },
       debugShowCheckedModeBanner: false,
     );
   }
@@ -46,12 +63,7 @@ class _GameScreenState extends State<GameScreen> {
     _uiTick = Timer.periodic(const Duration(milliseconds: 100), (_) {
       if (mounted) setState(() {});
     });
-    // Afficher le menu principal au démarrage
-    // On retire un éventuel overlay précédent pour éviter les doublons
-    WidgetsBinding.instance.addPostFrameCallback((_) {
-      game.overlays.add('MainMenu');
-      if (mounted) setState(() {});
-    });
+  // Le menu principal est dans une route séparée ('/').
   }
 
   // Pause removed
@@ -64,15 +76,16 @@ class _GameScreenState extends State<GameScreen> {
 
   @override
   Widget build(BuildContext context) {
-    return Scaffold(
+    return PopScope(
+      canPop: false, // désactive le retour en arrière in-game
+      child: Scaffold(
       backgroundColor: Colors.black,
-      body: SafeArea(
-        child: Stack(
+  body: Stack(
           children: [
             // Game and UI in a column
             Column(
               children: [
-                Container(
+        Container(
                   height: 70,
                   padding: const EdgeInsets.all(12),
                   child: Row(
@@ -99,12 +112,7 @@ class _GameScreenState extends State<GameScreen> {
                 Expanded(
                   child: Stack(
                     children: [
-                      GameWidget(
-                        game: game,
-                        overlayBuilderMap: {
-                          'MainMenu': (context, game) => MainMenuOverlay(game: this.game),
-                        },
-                      ),
+                      GameWidget(game: game),
                       Positioned.fill(
                         child: _FloatingJoystick(
                           onChanged: (dx, dy) => game.setJoystickDelta(dx, dy),

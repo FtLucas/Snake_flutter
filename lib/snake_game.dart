@@ -6,6 +6,7 @@ import 'dart:ui' as ui;
 import 'package:flame/components.dart';
 import 'package:flame/game.dart';
 import 'package:flutter/material.dart';
+import 'state/player_profile.dart';
 
 enum PowerUpType { speed, shield, multiFood }
 
@@ -524,11 +525,14 @@ class ProjectileComponent extends PositionComponent {
 
 
 class SnakeGame extends FlameGame {
-  SnakeGame({this.playerSpeed = 140.0});
+  SnakeGame({this.playerSpeed = 140.0, this.autoStart = true})
+      : basePlayerSpeed = playerSpeed;
   // grid
   final int gridSize = 24; // pixels per cell (visual)
-  late final int gridWidth;
-  late final int gridHeight;
+  // Not final: onGameResize can be called multiple times (rotation, overlays),
+  // so allow recomputation without LateInitializationError.
+  int gridWidth = 0;
+  int gridHeight = 0;
   // playfield (texture zone) with vertical margins
   // Marges de la zone de jeu: on garde le haut, on réduit par le bas
   final double topMargin = 48.0;
@@ -575,7 +579,7 @@ class SnakeGame extends FlameGame {
   int waveRemaining = 0;
   double waveBreakTimer = 0.0;
   // Délai fixe entre les vagues (et avant la première)
-  double waveBreakFixed = 4.0; // ajustable: 3.0–6.0 selon préférence
+  double waveBreakFixed = 3.0; // démarre les vagues un peu plus tôt
   double spawnIntervalInWave = 0.8;
   double spawnTimerInWave = 0.0;
   double waveElapsed = 0.0; // seconds since current wave start
@@ -647,13 +651,20 @@ class SnakeGame extends FlameGame {
   // Sky decor
   final List<_Cloud> _clouds = [];
   final List<_Star> _stars = [];
+  // Décor sol: suivi de taille et graine pour positions stables
+  int _lastW = -1, _lastH = -1;
+  int _decorSeed = 0;
+  bool _layoutLocked = false; // n'ajuste plus le layout après boot, sauf grands changements
   // Joystick (four-direction control) provided by Flutter overlay
   Vector2? _joystickDelta; // normalized [-1,1]
   final double _joystickDeadZone = 0.2;
   int _pendingGrowth = 0;
 
   // Continuous movement (pixels per second) like enemies
-  double playerSpeed; // configurable via ctor
+  double playerSpeed; // configurable via ctor (modifiable)
+  final double basePlayerSpeed; // base pour appliquer les compétences
+  final bool autoStart; // démarrage automatique lors du chargement
+  bool _booted = false; // init après connaissance de la taille
   Vector2 _headPixel = Vector2.zero();
   // Keep track of last grid cell we processed for collisions/food
   Vector2 _headGrid = Vector2.zero();
@@ -684,29 +695,63 @@ class SnakeGame extends FlameGame {
   @override
   Future<void> onLoad() async {
     super.onLoad();
-  // Define playfield occupying full width, smaller height (top/bottom margins)
-  playOrigin = Vector2(0, topMargin);
-  playSize = Vector2(size.x, (size.y - topMargin - bottomMargin).clamp(0, size.y));
-  gridWidth = (playSize.x / gridSize).floor();
-  gridHeight = (playSize.y / gridSize).floor();
+    // Les ressources peuvent être préchargées ici; la mise en page dépendra de la taille.
+    // La taille fiable est connue dans onGameResize: on bootera alors.
     await _generateGrassTile();
-    _generateSoilDecor();
-  _computeAnthill();
+    // Sol/anthill seront générés après dimensionnement
   _initializePowerUps();
-  // Ne pas démarrer la partie automatiquement; le menu contrôlera resetGame()
+    // Démarrage différé jusqu'à réception de la taille (onGameResize)
+  }
+
+  @override
+  void onGameResize(Vector2 size) {
+    super.onGameResize(size);
+    // Mesurer la taille reçue
+    final int w = size.x.floor();
+    final int h = size.y.floor();
+    final int dw = (_lastW < 0) ? 9999 : (w - _lastW).abs();
+    final int dh = (_lastH < 0) ? 9999 : (h - _lastH).abs();
+    final bool smallChange = dw <= 16 && dh <= 16;
+
+    // Si on a déjà fixé le layout et que le changement est minime (UI qui bouge), ignorer
+    if (_layoutLocked && smallChange) {
+      return;
+    }
+
+    // Calculer/mettre à jour le layout (première fois ou vrai changement d'orientation)
+    playOrigin = Vector2(0, topMargin);
+    playSize = Vector2(size.x, (size.y - topMargin - bottomMargin).clamp(0, size.y));
+    gridWidth = max(1, (playSize.x / gridSize).floor());
+    gridHeight = max(1, (playSize.y / gridSize).floor());
+
+    // Régénérer le décor seulement quand la taille change vraiment
+    _lastW = w; _lastH = h;
+    _decorSeed = (w * 73856093) ^ (h * 19349663);
+    _generateSoilDecor();
+    _computeAnthill();
+    // Boot une seule fois quand on a une taille valide
+  if (!_booted && autoStart && playSize.x > 0 && playSize.y > 0) {
+      _booted = true;
+      _initializeGame();
+      _startGameLoop();
+      _startEnemySpawning();
+      gameStarted = true;
+    }
+  _layoutLocked = true; // figer la hauteur de sol après boot
   }
 
   void _generateSoilDecor() {
+    final rng = Random(_decorSeed);
     _rocks.clear();
     _soilGrainsLight.clear();
     _soilGrainsDark.clear();
     final Rect soil = Rect.fromLTWH(0, playOrigin.y + playSize.y, size.x, size.y - (playOrigin.y + playSize.y));
     final int count = (size.x / 12).clamp(12, 80).toInt();
     for (int i = 0; i < count; i++) {
-      final double x = random.nextDouble() * soil.width;
-      final double y = random.nextDouble() * soil.height;
-      final double r = 2.0 + random.nextDouble() * 6.0;
-      final double ex = 0.8 + random.nextDouble() * 0.8;
+      final double x = rng.nextDouble() * soil.width;
+      final double y = rng.nextDouble() * soil.height;
+      final double r = 2.0 + rng.nextDouble() * 6.0;
+      final double ex = 0.8 + rng.nextDouble() * 0.8;
       // Choose whitish/grey/black palette to avoid flicker and match request
       const List<Color> palette = [
         Color(0xFFECEFF1), // very light
@@ -717,7 +762,7 @@ class SnakeGame extends FlameGame {
         Color(0xFF616161),
         Color(0xFF424242), // dark
       ];
-      final Color base = palette[random.nextInt(palette.length)];
+      final Color base = palette[rng.nextInt(palette.length)];
       _rocks.add(_Rock(Offset(soil.left + x, soil.top + y), r, ex, base));
     }
 
@@ -729,13 +774,13 @@ class SnakeGame extends FlameGame {
       final int lightCount = (soilGrainArea.width * soilGrainArea.height / 1600).clamp(80, 420).toInt();
       final int darkCount = (soilGrainArea.width * soilGrainArea.height / 2000).clamp(60, 360).toInt();
       for (int i = 0; i < lightCount; i++) {
-        final double x = random.nextDouble() * soilGrainArea.width;
-        final double y = random.nextDouble() * soilGrainArea.height;
+        final double x = rng.nextDouble() * soilGrainArea.width;
+        final double y = rng.nextDouble() * soilGrainArea.height;
         _soilGrainsLight.add(Offset(soilGrainArea.left + x, soilGrainArea.top + y));
       }
       for (int i = 0; i < darkCount; i++) {
-        final double x = random.nextDouble() * soilGrainArea.width;
-        final double y = random.nextDouble() * soilGrainArea.height;
+        final double x = rng.nextDouble() * soilGrainArea.width;
+        final double y = rng.nextDouble() * soilGrainArea.height;
         _soilGrainsDark.add(Offset(soilGrainArea.left + x, soilGrainArea.top + y));
       }
     }
@@ -920,7 +965,7 @@ class SnakeGame extends FlameGame {
   gameStarted = false; // sera mis à jour par resetGame()
     showPowerUpSelection = false;
 
-    hasShield = false;
+  hasShield = false;
     hasMultiFood = false;
     speedMultiplier = 1.0;
   _poisonTimer = 0.0;
@@ -952,6 +997,15 @@ class SnakeGame extends FlameGame {
   _headGrid = snake.first.clone();
   food = null;
     generateFood();
+    // Appliquer compétences du profil joueur
+    final profile = PlayerProfile.instance;
+    final spdLvl = profile.skillLevel('speed');
+    playerSpeed = basePlayerSpeed + 10.0 * spdLvl; // +10 px/s par niveau (non cumulatif)
+    final shieldLvl = profile.skillLevel('shield');
+    if (shieldLvl > 0) {
+      hasShield = true;
+      shieldDuration = 2.0 * shieldLvl; // +2s par niveau au départ
+    }
     // Seed clouds (day) and stars (night)
     _clouds
       ..clear()
@@ -1127,6 +1181,10 @@ class SnakeGame extends FlameGame {
       if (d <= snakeHeadRadius + (gridSize / 2 - 2)) {
         _pendingGrowth += hasMultiFood ? 2 : 1;
         int points = hasMultiFood ? 20 : 10;
+        final foodLvl = PlayerProfile.instance.skillLevel('food');
+        if (foodLvl > 0) {
+          points = (points * (1.0 + 0.05 * foodLvl)).round();
+        }
         score += points;
         experience += 2;
         foodEaten++;
