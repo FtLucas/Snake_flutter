@@ -46,22 +46,50 @@ class GardenMenuGame extends FlameGame {
   bool _snakeAlive = true;
   double _respawnT = 0.0;
   double _dmgCooldown = 0.0; // petite invulnérabilité pour ne pas fondre instantanément
-  double _spawnTimer = 0.0; // Timer pour le spawn irrégulier des fourmis
+  // Contrôle d'errance plus organique du serpent
+  double _wanderAng = 0.0;     // orientation actuelle (radians)
+  double _wanderOmega = 0.0;   // vitesse angulaire actuelle
+  double _wanderTimer = 0.0;   // temps restant avant de recalculer un nouvel omega
+
+  // Cooldown de morsure et étourdissement (bloque mouvement)
+  double _eatCooldown = 0.0; // secondes restantes avant de pouvoir remanger
+  double _eatStunT = 0.0;    // secondes restantes de blocage après avoir mangé
+  // Ralentissement temporaire quand le serpent se fait mordre
+  double _biteSlowT = 0.0;   // durée restante du slow
+
+  // Animation de menu: machine à états
+  int _scene = 0;            // 0: spawn pomme, 1: chute, 2: roule vers fourmilière, 3: serpent attaqué/meurt, 4: vie sans serpent
+  double _sceneTimer = 0.0;  // minuterie générique
+  int? _scriptAppleIdx;      // index de la pomme scriptée dans _falling
+  bool _disableRespawn = true;    // le serpent ne réapparaît plus (activé dès le début du menu)
+  bool _sceneInit = false;         // init one-shot au premier update
+  bool _sceneAntsSpawned = false;  // flag pour indiquer si les fourmis de la scène ont été spawnées
+
+  // Temps de descente du serpent après l'apparition d'une pomme
+  double _snakeDescendT = 0.0;
+  // Paramètres et chemin de descente pour un mouvement plus naturel le long du tronc
+  double _snakeDescendDur = 0.0; // durée totale de descente
+  // (anciens champs start/end inutilisés après refonte des phases)
+  // Phases: 0 = feuilles->tronc (Bezier), 1 = glisse sur tronc, 2 = sortie sur l'herbe
+  int _snakeDescendPhase = 0;
+  double _snakePhaseDur0 = 0.0, _snakePhaseDur1 = 0.0, _snakePhaseDur2 = 0.0;
+  Offset? _snakeP0, _snakeP1, _snakeP2, _snakeP3, _snakeP4; // points clés
+  // (ancien contrôle Bezier stocké — non utilisé explicitement)
+  // Position de la pomme arrêtée (centre d'orbite des fourmis de scène)
+  Offset? _sceneApplePos;
+  // Délai avant l'apparition du serpent après l'arrivée de la pomme
+  double _snakeAppearDelay = 0.0;
+
+  // Burst de fourmis: spawn échelonné
+  int _burstToSpawn = 0;           // combien restent à faire sortir
+  double _burstSpawnInterval = 0;  // intervalle courant entre sorties
+  double _burstSpawnTimer = 0;     // minuterie avant la prochaine sortie
+
+  // (helper retiré: on ne déplace plus le tronc/canopée dynamiquement)
 
   @override
   Future<void> onLoad() async {
     _rebuildDecor();
-    // Ajouter plus de fourmis dès le lancement
-    for (int i = 0; i < 20; i++) {
-      final double angle = _rng.nextDouble() * pi * 2;
-      final double distance = _hillR * (1.5 + _rng.nextDouble() * 5.0);
-      final Offset spawnPosition = _hillPos + Offset(cos(angle) * distance, sin(angle) * distance);
-      _ants.add(_MAnt(
-        p: spawnPosition,
-        dir: _rng.nextDouble() * 6.283,
-        speed: 20 + _rng.nextDouble() * 34,
-      ));
-    }
   }
 
   @override
@@ -129,34 +157,21 @@ class GardenMenuGame extends FlameGame {
       _hillPos = Offset(size.x * 0.74, size.y - _soilH);
       _hillR = (size.x * 0.03).clamp(14.0, 24.0);
 
-    // Ants: plus nombreuses près de la fourmilière, mais partout dans l'herbe
-    _ants
-      ..clear()
-      ..addAll(List.generate((size.x / 60).clamp(10, 26).toInt(), (i) {
-        final bool nearHill = i < ((size.x / 60).clamp(10, 26).toInt() * 0.45).round();
-        Offset p;
-        if (nearHill) {
-          // autour de l'entrée (ellipse aplatie), puis clamp dans l'herbe
-          final double a = _rng.nextDouble() * pi * 2;
-          final double rr = (_hillR * 3.0) + _rng.nextDouble() * (_hillR * 5.0);
-          p = _hillPos + Offset(cos(a) * rr, sin(a) * rr * 0.6);
-          final double minY = _groundTop + 6;
-          final double maxY = size.y - _soilH - 12;
-          p = Offset(p.dx.clamp(6, size.x - 6), p.dy.clamp(minY, maxY));
-        } else {
-          p = Offset(
-            _rng.nextDouble() * size.x,
-            _groundTop + 10 + _rng.nextDouble() * ((size.y - _soilH) - _groundTop - 26),
-          );
-        }
-        return _MAnt(
-          p: p,
-          dir: _rng.nextDouble() * 6.283,
-          speed: 20 + _rng.nextDouble() * 34,
-        );
-      }));
+  // Ants: aucune au départ (elles sortiront pendant la scène scriptée)
+  _ants.clear();
 
-  // Snake: initialized in-game style in this method below
+  // Snake: préparer mais ne pas l'afficher au départ (il apparaîtra plus tard via la scène)
+    _trailSpacing = 12.0;
+    _mSpeed = 90.0;
+    _snakeMaxHp = (size.x / 20).clamp(12, 26).toInt();
+    _snakeHp = 0;
+    _snakeAlive = false;
+    _respawnT = 0.0;
+  _segments.clear();
+  _trail.clear();
+  _wanderAng = 0.0;
+  _wanderOmega = 0.0;
+  _wanderTimer = 0.0;
 
     // Soil decor items (stones and fossils), stable via size-derived seed
     _soilItems.clear();
@@ -239,8 +254,8 @@ class GardenMenuGame extends FlameGame {
     _trailSpacing = 12.0;
     _mSpeed = 90.0;
     _snakeMaxHp = (size.x / 20).clamp(12, 26).toInt();
-    _snakeHp = _snakeMaxHp;
-    _snakeAlive = true;
+    _snakeHp = 0;
+    _snakeAlive = false;
     _respawnT = 0.0;
     // position de départ dans la zone herbe
     final double minX = 10, maxX = size.x - 10;
@@ -259,48 +274,128 @@ class GardenMenuGame extends FlameGame {
     _trail.clear(); // on n'utilise plus la trail éparse pour le rendu
   }
 
-  // Réduction de la zone de vision du serpent
-  bool _isAntInVision(Offset antPosition) {
-    const double visionRadius = 100.0; // Réduction du rayon de vision
-    return (antPosition - _mHead).distance <= visionRadius;
-  }
+  // (vision culling désactivé)
 
   // Spawn irrégulier des fourmis depuis la fourmilière
   void _spawnAntsIrregularly(double deltaTime) {
-    _spawnTimer -= deltaTime;
-    if (_spawnTimer <= 0.0) {
-      _spawnTimer = 1.0 + _rng.nextDouble() * 2.0; // Intervalle réduit entre 1 et 3 secondes
-      final double angle = _rng.nextDouble() * pi * 2;
-      final double distance = _hillR * (1.5 + _rng.nextDouble() * 2.0);
-      final Offset spawnPosition = _hillPos + Offset(cos(angle) * distance, sin(angle) * distance);
-      _ants.add(_MAnt(
-        p: spawnPosition,
-        dir: _rng.nextDouble() * 6.283,
-        speed: 20 + _rng.nextDouble() * 34,
-      ));
-    }
+    return; // désactivé pour la scène scriptée
   }
 
   @override
   void update(double dt) {
     super.update(dt);
 
-    // Mise à jour de la vitesse du serpent
+  // Pilotage de la scène en tout premier (permet d'ajouter la pomme avant la physique)
+  _updateScene(dt);
+
+    // Gestion du spawn échelonné du burst de fourmis
+    if (_burstToSpawn > 0) {
+      _burstSpawnTimer -= dt;
+      if (_burstSpawnTimer <= 0) {
+        // spawn d'une fourmi du burst
+        final double ang = _rng.nextDouble() * pi * 2;
+        final Offset dir = Offset(cos(ang), sin(ang));
+        final ant = _MAnt(p: _hillPos + dir * 2.0, dir: ang, speed: 22 + _rng.nextDouble() * 14);
+        ant.emerging = true;
+        ant.emergeDir = dir;
+        ant.emergeT = 0.0;
+        ant.emergeDur = 0.9 + _rng.nextDouble() * 0.6;
+        ant.fromBurst = true;
+        _ants.add(ant);
+        _burstToSpawn--;
+        _burstSpawnInterval = 0.25 + _rng.nextDouble() * 0.35; // 0.25..0.6s
+        _burstSpawnTimer = _burstSpawnInterval;
+      }
+    }
+
+    // Mise à jour des timers
     if (_snakeAlive) {
-        // Removed _reduceSnakeSpeed(dt) as it is undefined
+      if (_biteSlowT > 0) _biteSlowT = max(0, _biteSlowT - dt);
     }
 
     _spawnAntsIrregularly(dt); // Gestion du spawn irrégulier des fourmis
 
-    // Filtrer les fourmis visibles
-    _ants.removeWhere((ant) => !_isAntInVision(ant.p));
+  // Désactivation du culling pour éviter la disparition des fourmis pendant la scénette
+  // et lors des attaques. Garder toutes les fourmis améliore la stabilité visuelle.
+  // Ancien code conservé ci-dessous pour référence si besoin de réactiver avec des règles plus strictes.
+  // if (_snakeAlive && !(_scene == 2 || _scene == 3 || _scene == 4)) {
+  //   _ants.removeWhere((ant) => !ant.emerging && !ant.fromBurst && !_isAntInVision(ant.p));
+  // }
 
   _t = (_t + dt / cycleSeconds) % 1.0;
     _time += dt;
-    // ants wander/chase
+    // ants wander/chase or orbit (scripted)
     for (final a in _ants) {
-      // comportement: poursuite du serpent si à portée, sinon errance
-  const double chaseR = 90.0;
+      // Emergence: sortir brièvement de la fourmilière puis passer en orbite
+      if (a.emerging) {
+        a.emergeT += dt;
+        final double t = (a.emergeDur <= 0) ? 1.0 : (a.emergeT / a.emergeDur).clamp(0.0, 1.0);
+  final double spd = 18.0 + (36.0 - 18.0) * (1.0 - (t * 0.6)); // démarre plus vite puis ralentit
+        a.p += a.emergeDir * spd * dt;
+        a.dir = atan2(a.emergeDir.dy, a.emergeDir.dx);
+        if (t >= 1.0) {
+          a.emerging = false;
+          if (a.fromBurst) {
+            // fourmis d'éclaireuse: restent en errance libre
+            a.orbiting = false;
+          } else {
+            // accroche à une orbite aléatoire autour de la fourmilière
+            a.orbiting = true;
+            a.orbitCenter = _hillPos;
+            a.orbitR = (_hillR * 1.1) + _rng.nextDouble() * (_hillR * 0.7);
+            a.orbitEccY = 0.6;
+            a.orbitOmega = (_rng.nextBool() ? 1.0 : -1.0) * (0.6 + _rng.nextDouble() * 0.6);
+            // calculer phase à partir de sa position actuelle
+            final Offset rel = a.p - a.orbitCenter;
+            a.orbitPhase = atan2(rel.dy / max(0.0001, a.orbitEccY), rel.dx);
+          }
+        }
+        continue;
+      }
+      if (a.orbiting) {
+        // Détection attaque: serpent proche de la fourmilière ou de la fourmi
+  final double snakeDistHill = (_mHead - _hillPos).distance;
+        final double snakeDistAnt = (a.p - _mHead).distance;
+  a.isAttacking = (snakeDistHill < _hillR * 2.2) || (snakeDistAnt < 36.0);
+        if (a.isAttacking && _snakeAlive) {
+          // Attaque: choisir/viser un segment spécifique du serpent
+          a.retargetT -= dt;
+          if (a.retargetT <= 0 || a.attackTargetSegIdx < 0 || a.attackTargetSegIdx >= _segments.length) {
+            // choisir un segment aléatoire, en évitant parfois la tête
+            final int maxIdx = max(1, _segments.length - 1);
+            a.attackTargetSegIdx = 1 + _rng.nextInt(maxIdx); // 1..last (évite la tête)
+            a.retargetT = 0.6 + _rng.nextDouble() * 0.9; // retarget régulier
+          }
+          final Offset target = a.attackTargetSegIdx >= 0 && a.attackTargetSegIdx < _segments.length
+              ? _segments[a.attackTargetSegIdx]
+              : _mHead;
+          final Offset toHead = target - a.p;
+          final double d = toHead.distance;
+          if (d > 0.0001) {
+            final Offset v = toHead / d;
+            final double atkSpd = max(a.speed * 2.0, 32.0);
+            a.p += v * atkSpd * dt;
+            a.dir = atan2(v.dy, v.dx);
+          }
+        } else {
+          // Orbitage par défaut autour de la fourmilière
+          double omega = a.orbitOmega;
+          a.orbitPhase += omega * dt;
+          final Offset center = a.orbitCenter;
+          a.p = center + Offset(cos(a.orbitPhase) * a.orbitR, sin(a.orbitPhase) * a.orbitR * a.orbitEccY);
+          final Offset tanRaw = Offset(-sin(a.orbitPhase), cos(a.orbitPhase) * a.orbitEccY);
+          final double tLen = tanRaw.distance;
+          final Offset tangent = tLen > 1e-6 ? tanRaw / tLen : const Offset(1, 0);
+          a.dir = atan2(tangent.dy, tangent.dx);
+        }
+        continue;
+      }
+      // Pendant la scénette, empêcher les fourmis non-burst d'abandonner l'orbite pour la pomme
+      if ((_scene == 2 || _scene == 3) && !a.fromBurst) {
+        continue;
+      }
+  // comportement: poursuite du serpent si à portée, sinon errance
+      const double chaseR = 90.0;
       final Offset toHead = _mHead - a.p;
       final double dh = toHead.distance;
       if (_snakeAlive && dh < chaseR) {
@@ -309,52 +404,82 @@ class GardenMenuGame extends FlameGame {
       } else {
         a.dir += (_rng.nextDouble() - 0.5) * 0.7 * dt; // jitter
       }
+      // Après la scénette, garder les fourmis proches de la fourmilière (retour doux)
+  if (_scene >= 4 && !a.fromBurst) {
+        final Offset toHome = _hillPos - a.p;
+        final double dist = toHome.distance;
+        if (dist > 1.0) {
+          final Offset curV = Offset(cos(a.dir), sin(a.dir));
+          final Offset homeV = toHome / dist;
+          final double pull = dist > _hillR * 3.0 ? 0.6 : 0.25; // plus fort si trop loin
+          final Offset blended = curV * (1 - pull) + homeV * pull;
+          a.dir = atan2(blended.dy, blended.dx);
+        }
+      }
       final double spd = _snakeAlive && dh < chaseR ? (a.speed * 1.15) : a.speed;
       final v = Offset(cos(a.dir), sin(a.dir)) * spd * dt;
       a.p += v;
-      if (a.p.dx < 6) { a.p = Offset(6, a.p.dy); a.dir = pi - a.dir; }
-      if (a.p.dx > size.x - 6) { a.p = Offset(size.x - 6, a.p.dy); a.dir = pi - a.dir; }
-      if (a.p.dy < _groundTop + 6) { a.p = Offset(a.p.dx, _groundTop + 6); a.dir = -a.dir; }
+  if (a.p.dx < 6) { a.p = Offset(6, a.p.dy); a.dir = pi - a.dir; }
+  if (a.p.dx > size.x - 6) { a.p = Offset(size.x - 6, a.p.dy); a.dir = pi - a.dir; }
+  if (a.p.dy < _groundTop + 6) { a.p = Offset(a.p.dx, _groundTop + 6); a.dir = -a.dir; }
   if (a.p.dy > size.y - _soilH - 10) { a.p = Offset(a.p.dx, size.y - _soilH - 10); a.dir = -a.dir; }
     }
     // Serpent style in-game: déplacement, collisions, HP/respawn
     if (_dmgCooldown > 0) _dmgCooldown -= dt;
-    if (_snakeAlive) {
-      // steering: vise une fourmi proche sinon errance + évitement bords
-      final double minX = 8, maxX = size.x - 8;
-      final double minY = _groundTop + 8, maxY = size.y - _soilH - 12;
-      Offset avoid = Offset.zero;
-      if (_mHead.dx < minX + 18) avoid += const Offset(1, 0);
-      if (_mHead.dx > maxX - 18) avoid += const Offset(-1, 0);
-      if (_mHead.dy < minY + 18) avoid += const Offset(0, 1);
-      if (_mHead.dy > maxY - 18) avoid += const Offset(0, -1);
-      // cibler l'ant la plus proche dans un rayon
-      const double seekR = 120.0;
-      Offset dir = _mDir;
-      double bestD = seekR;
-      for (final a in _ants) {
-        final double d = (a.p - _mHead).distance;
-        if (d < bestD) {
-          bestD = d;
-          dir = (a.p - _mHead);
-        }
+  // Bloquer l'errance pendant la descente scriptée (scène 2)
+  if (_snakeAlive && _eatStunT <= 0 && !(_scene == 2 && _snakeDescendT > 0)) {
+      // steering: errance lissée + maintien doux à l'intérieur de la zone verte
+      final double minX = 12, maxX = size.x - 12;
+      final double minY = _groundTop + 12, maxY = size.y - _soilH - 16;
+
+      // errance lissée: oméga bruité
+      _wanderTimer -= dt;
+      if (_wanderTimer <= 0) {
+        final double target = (_rng.nextDouble() - 0.5) * 1.2; // rad/s (un peu moins prononcé)
+        _wanderOmega = _wanderOmega * 0.7 + target * 0.3;
+        _wanderTimer = 0.35 + _rng.nextDouble() * 0.55; // 0.35..0.9s
       }
-      if (bestD == seekR) {
-        // pas de cible -> errance légère
-        double ang = atan2(_mDir.dy, _mDir.dx);
-        ang += (_rng.nextDouble() - 0.5) * 1.2 * dt; // zigzag
-        dir = Offset(cos(ang), sin(ang));
+      final double omega = _wanderOmega * (_biteSlowT > 0 ? 0.6 : 1.0);
+      _wanderAng = atan2(_mDir.dy, _mDir.dx) + omega * dt;
+      Offset dir = Offset(cos(_wanderAng), sin(_wanderAng));
+
+      // force douce vers l'intérieur (centre de la zone verte)
+      final Offset center = Offset(size.x * 0.5, (_groundTop + (size.y - _soilH)) * 0.5);
+      final Offset toCenter = center - _mHead;
+      final double distC = toCenter.distance;
+      Offset centerPull = Offset.zero;
+      if (distC > 0.001) {
+        final Offset nC = toCenter / distC;
+        // calculer marge aux bords
+        final double marginX = min(_mHead.dx - minX, maxX - _mHead.dx);
+        final double marginY = min(_mHead.dy - minY, maxY - _mHead.dy);
+        final double margin = min(marginX, marginY);
+        // plus le serpent est proche d’un bord, plus on accentue le pull
+    final double pull = (margin < 40)
+      ? ui.lerpDouble(0.15, 0.85, (40 - margin) / 40)!.clamp(0.15, 0.85)
+      : 0.0;
+        centerPull = nC * pull;
       }
-      if (avoid != Offset.zero) {
-        final double d = avoid.distance;
-        avoid = avoid / d;
-        dir = (dir * 0.9 + avoid * 0.6);
-        final double m = dir.distance;
-        if (m > 0.0001) dir = dir / m;
-      }
-      _mDir = dir;
-      _mHead += _mDir * _mSpeed * dt;
-      // clamp safety
+
+      // évitement prédictif des bords (sans ricochet): corriger la direction
+      const double lookAhead = 28.0;
+      final Offset ahead = _mHead + dir * lookAhead;
+      double steerX = 0, steerY = 0;
+      if (ahead.dx < minX) steerX = (minX - ahead.dx) / lookAhead;
+      if (ahead.dx > maxX) steerX = (maxX - ahead.dx) / lookAhead;
+      if (ahead.dy < minY) steerY = (minY - ahead.dy) / lookAhead;
+      if (ahead.dy > maxY) steerY = (maxY - ahead.dy) / lookAhead;
+      final Offset boundarySteer = Offset(steerX, steerY);
+
+      // combiner: direction d’errance + recentrage + évitement
+      Offset blended = dir * 0.80 + centerPull * 0.55 + boundarySteer * 0.90;
+      final double m = blended.distance;
+      if (m > 1e-6) blended = blended / m;
+      _mDir = blended;
+
+      final double speedMul = _biteSlowT > 0 ? 0.55 : 1.0; // ralentir pendant le slow
+      _mHead += _mDir * (_mSpeed * speedMul) * dt;
+      // clamp final (sécurité, rarement déclenché)
       _mHead = Offset(_mHead.dx.clamp(minX, maxX), _mHead.dy.clamp(minY, maxY));
 
       // segments du corps: chaque segment suit le précédent à distance fixe
@@ -376,68 +501,68 @@ class GardenMenuGame extends FlameGame {
         }
       }
 
-      // interactions: manger les fourmis touchées (disparaissent)
-      for (int i = _ants.length - 1; i >= 0; i--) {
-        final a = _ants[i];
-        if ((a.p - _mHead).distance < 10.0) {
-          _ants.removeAt(i);
-          _snakeHp = min(_snakeMaxHp, _snakeHp + 1); // gagne 1 PV en mangeant
-        }
-      }
-      // fourmis qui "attaquent" si trop proches du corps (n'importe quel segment)
-      bool attacked = false;
+  // interactions: désactivées — le serpent ne mange plus les fourmis dans le menu
+      // Dégâts des fourmis: si une fourmi touche un segment, réduire la longueur (HP)
       if (_dmgCooldown <= 0) {
-        for (final a in _ants) {
-          // test sur quelques segments (ou tous si peu)
-          final int step = _segments.length > 16 ? 2 : 1;
-          for (int si = 0; si < _segments.length; si += step) {
-            if ((a.p - _segments[si]).distance < 11.0) {
-              attacked = true;
-              break;
-            }
+        const double biteR = 8.0; // rayon d'impact légèrement plus grand
+        bool gotBitten = false;
+        // tester tête + segments
+        for (final ant in _ants) {
+          if ((ant.p - _mHead).distance <= biteR) { gotBitten = true; break; }
+          for (int i = 1; i < _segments.length; i++) {
+            if ((ant.p - _segments[i]).distance <= biteR) { gotBitten = true; break; }
           }
-          if (attacked) break;
+          if (gotBitten) break;
+        }
+        if (gotBitten) {
+          if (_snakeHp > 1) {
+            _snakeHp = max(1, _snakeHp - 1);
+            _segments.removeRange(min(_segments.length, _snakeHp), _segments.length);
+          } else {
+            // Dernière morsure: mort de la tête
+            _snakeHp = 0;
+            _snakeAlive = false;
+            _respawnT = 9999; // ne pas respawn dans le menu
+          }
+          _dmgCooldown = 0.35;
+          // appliquer un ralentissement temporaire
+          _biteSlowT = 1.2; // ralenti pendant 1.2s
         }
       }
-      if (attacked) {
-        _snakeHp = max(0, _snakeHp - 1);
-        _dmgCooldown = 0.6;
-        if (_snakeHp == 0) {
-          _snakeAlive = false;
-          _respawnT = 3.0;
-          _segments.clear();
-        }
-      }
-    } else {
+  } else if (!_snakeAlive) {
       _respawnT -= dt;
       if (_respawnT <= 0) {
-        // respawn
-        _snakeHp = _snakeMaxHp;
-        _snakeAlive = true;
-        final double minX = 10, maxX = size.x - 10;
-        final double minY = _groundTop + 10, maxY = size.y - _soilH - 14;
-        _mHead = Offset(
-          _rng.nextDouble() * (maxX - minX) + minX,
-          _rng.nextDouble() * (maxY - minY) + minY,
-        );
-        final double ang = _rng.nextDouble() * pi * 2;
-        _mDir = Offset(cos(ang), sin(ang));
-        _segments
-          ..clear()
-          ..addAll(List.generate(_snakeHp, (i) => _mHead - _mDir * (_trailSpacing * i)));
+        if (_disableRespawn) {
+          // Rester sans serpent mais continuer à mettre à jour la scène
+        } else {
+          // respawn
+          _snakeHp = _snakeMaxHp;
+          _snakeAlive = true;
+          final double minX = 10, maxX = size.x - 10;
+          final double minY = _groundTop + 10, maxY = size.y - _soilH - 14;
+          _mHead = Offset(
+            _rng.nextDouble() * (maxX - minX) + minX,
+            _rng.nextDouble() * (maxY - minY) + minY,
+          );
+          final double ang = _rng.nextDouble() * pi * 2;
+          _mDir = Offset(cos(ang), sin(ang));
+          _segments
+            ..clear()
+            ..addAll(List.generate(_snakeHp, (i) => _mHead - _mDir * (_trailSpacing * i)));
+        }
       }
     }
 
-    // falling apples update + occasional spawn
-    if (_falling.length < 6 && _rng.nextDouble() < 0.25 * dt) {
-      // spawn near top of canopy
+  // falling apples update + occasional spawn (désactivé pendant la scénette)
+  if (_scene >= 4 && _falling.length < 6 && _rng.nextDouble() < 0.25 * dt) {
+      // Spawn proche du haut de la canopée (comme avant)
       final ang = _rng.nextDouble() * pi * 2;
       final rr = _canopyR * (0.2 + _rng.nextDouble() * 0.6);
       final start = _canopyCenter + Offset(cos(ang) * rr, sin(ang) * rr * 0.6);
       final vx = (_rng.nextDouble() * 40 - 20);
       _falling.add(_FallingApple(p: start, v: Offset(vx, -10), spin: _rng.nextDouble() * 6.283));
     }
-    final double groundY = _groundTop - 3; // rest just on grass
+  final double groundY = _groundTop - 3; // surface herbe (haut de l'herbe)
     for (final fa in _falling) {
       if (fa.rest) continue;
       fa.v = fa.v + Offset(0, 220 * dt); // gravity
@@ -450,6 +575,7 @@ class GardenMenuGame extends FlameGame {
         } else {
           fa.v = Offset.zero;
           fa.rest = true;
+          // On ne déplace plus le tronc/canopée dynamiquement
         }
       }
     }
@@ -542,6 +668,15 @@ class GardenMenuGame extends FlameGame {
         cl.pos = Offset(-cl.r * 2, cl.pos.dy);
       }
     }
+
+  // Cooldowns morsure / étourdissement
+    if (_eatCooldown > 0) _eatCooldown = max(0, _eatCooldown - dt);
+    if (_eatStunT > 0) {
+      _eatStunT = max(0, _eatStunT - dt);
+      // On n'arrête plus la frame; le bloc de mouvement du serpent va simplement s'auto-désactiver.
+    }
+
+  // (la FSM a été gérée en début de frame)
   }
 
   // échantillonner un point plausible sur le volume des feuilles (canopée)
@@ -633,15 +768,8 @@ class GardenMenuGame extends FlameGame {
         const [0.0, 1.0],
       );
     canvas.drawRect(grass, grassPaint);
-    // bande lumineuse directionnelle sur l'herbe (3D-like)
-    final Offset ld = (sp - grass.center).scale(1, 1);
-    final double len = ld.distance == 0 ? 1 : ld.distance;
-    final Offset dir = Offset(ld.dx / len, ld.dy / len);
-    final Offset g0 = grass.center - dir * (size.x * 0.6);
-    final Offset g1 = grass.center + dir * (size.x * 0.6);
-    final Paint grassLight = Paint()
-      ..shader = ui.Gradient.linear(g0, g1, [Colors.transparent, Colors.white.withValues(alpha: 0.10 * dayAmt), Colors.transparent], const [0.0, 0.5, 1.0]);
-    canvas.drawRect(grass, grassLight);
+  // bande lumineuse directionnelle retirée pour un rendu plus plat sous les fourmis
+  // plus de besoin de direction de lumière pour le feuillage (ombres statiques supprimées)
 
   // bande de terre
     final Rect soil = Rect.fromLTWH(0, size.y - _soilH, size.x, _soilH);
@@ -652,10 +780,10 @@ class GardenMenuGame extends FlameGame {
         const [0.0, 1.0],
       );
     canvas.drawRect(soil, soilPaint);
-    // clip pour que pierres/fossiles ne débordent jamais dans l'herbe
-    canvas.save();
-    canvas.clipRect(soil);
-    // clip pour que pierres/fossiles ne débordent jamais dans l'herbe
+  // clip pour que pierres/fossiles ne débordent jamais dans l'herbe
+  canvas.save();
+  canvas.clipRect(soil);
+  // clip pour que pierres/fossiles ne débordent jamais dans l'herbe
     canvas.save();
     canvas.clipRect(Rect.fromLTWH(soil.left, soil.top + 4, soil.width, soil.height - 4));
     for (final it in _soilItems) {
@@ -663,39 +791,159 @@ class GardenMenuGame extends FlameGame {
     }
     canvas.restore();
     canvas.restore();
-    // ombre portée au bord de l'herbe sur la terre (relief)
-  const double lipH = 14.0;
-    final Rect lip = Rect.fromLTWH(0, soil.top, size.x, lipH);
-  final Paint lipPaint = Paint()
-      ..shader = ui.Gradient.linear(
-        lip.topLeft, lip.bottomLeft,
-        [Colors.black.withValues(alpha: 0.22), Colors.transparent],
-        const [0.0, 1.0],
-      );
-  canvas.drawRect(lip, lipPaint);
+  // suppression de l'ombre du bord d'herbe sur la terre
 
   // (Les touffes d'herbe seront dessinées en tout premier plan, plus bas)
 
   // tronc (ancré sur l’herbe) plus détaillé
   final trunkW = _treeHeight * 0.14;
   final trunkRect = Rect.fromLTWH(_treeBase.dx - trunkW / 2, _treeBase.dy - _treeHeight, trunkW, _treeHeight);
+  // (pas d'ombre portée pour le tronc — supprimée)
   final Paint trunkGrad = Paint()
       ..shader = ui.Gradient.linear(trunkRect.topLeft, trunkRect.bottomLeft, [const Color(0xFF8D6E63), const Color(0xFF6D4C41), const Color(0xFF5D4037)], const [0.0, 0.6, 1.0]);
     canvas.drawRRect(RRect.fromRectAndRadius(trunkRect, const Radius.circular(8)), trunkGrad);
-    // racines
-  final Paint root = Paint()..color = const Color(0xFF5D4037).withValues(alpha: 0.6);
-    canvas.drawOval(Rect.fromCenter(center: Offset(_treeBase.dx, _treeBase.dy + 4), width: trunkW * 1.8, height: 8), root);
-    // ombre portée du tronc sur l'herbe (douce et directionnelle)
-    final Offset shadowDir = dir * 1.0;
-    final Offset shadowCenter = Offset(_treeBase.dx, _groundTop + 6) + Offset(shadowDir.dx * 18, max(0, shadowDir.dy) * 10);
-    final Rect trunkShadow = Rect.fromCenter(center: shadowCenter, width: trunkW * 2.8, height: 10);
-    final Paint trunkShadowPaint = Paint()
-      ..shader = ui.Gradient.radial(trunkShadow.center, trunkShadow.width * 0.5, [Colors.black.withValues(alpha: 0.20 * dayAmt), Colors.transparent], const [0, 1]);
-    canvas.drawOval(trunkShadow, trunkShadowPaint);
+    // texture d'écorce (traits ondulés et nœuds subtils, sans ombre portée)
+    {
+  const int lines = 9;
+      for (int i = 0; i < lines; i++) {
+        final double fx = (i + 1) / (lines + 1); // position horizontale dans le tronc
+        final double amp = 0.8 + (i % 3) * 0.5;  // amplitude de l'ondulation
+        final double phase = i * 0.9;
+        final Paint darkStroke = Paint()
+          ..color = const Color(0xFF3E2723).withValues(alpha: 0.18)
+          ..style = PaintingStyle.stroke
+          ..strokeWidth = 1.2
+          ..strokeCap = StrokeCap.round;
+  final Path path = Path();
+        double y = trunkRect.top + 6;
+  const double step = 10;
+  final double x0 = trunkRect.left + trunkW * fx;
+        path.moveTo(x0, y);
+        while (y < trunkRect.bottom - 6) {
+          y += step;
+          final double t = (y - trunkRect.top) / trunkRect.height;
+          final double x = x0 + sin(t * pi * 2.0 + phase) * amp;
+          path.lineTo(x, y);
+        }
+        canvas.drawPath(path, darkStroke);
+      }
+
+      // quelques reflets fins pour accentuer le relief
+  const List<double> hi = [0.22, 0.48, 0.74];
+      for (int i = 0; i < hi.length; i++) {
+        final double fx = hi[i];
+        final double amp = 0.6 + i * 0.2;
+        final double phase = 0.4 + i * 0.7;
+        final Paint lightStroke = Paint()
+          ..color = Colors.white.withValues(alpha: 0.07)
+          ..style = PaintingStyle.stroke
+          ..strokeWidth = 0.9
+          ..strokeCap = StrokeCap.round;
+  final Path path = Path();
+        double y = trunkRect.top + 8;
+  const double step = 12;
+  final double x0 = trunkRect.left + trunkW * fx;
+        path.moveTo(x0, y);
+        while (y < trunkRect.bottom - 8) {
+          y += step;
+          final double t = (y - trunkRect.top) / trunkRect.height;
+          final double x = x0 + sin(t * pi * 2.0 + phase) * amp;
+          path.lineTo(x, y);
+        }
+        canvas.drawPath(path, lightStroke);
+      }
+
+      // petits noeuds d'écorce (plus nombreux)
+  final List<Offset> knots = <Offset>[
+        Offset(trunkRect.left + trunkW * 0.30, trunkRect.top + trunkRect.height * 0.28),
+        Offset(trunkRect.left + trunkW * 0.55, trunkRect.top + trunkRect.height * 0.38),
+        Offset(trunkRect.left + trunkW * 0.40, trunkRect.top + trunkRect.height * 0.52),
+        Offset(trunkRect.left + trunkW * 0.66, trunkRect.top + trunkRect.height * 0.62),
+        Offset(trunkRect.left + trunkW * 0.34, trunkRect.top + trunkRect.height * 0.72),
+        Offset(trunkRect.left + trunkW * 0.58, trunkRect.top + trunkRect.height * 0.82),
+      ];
+      for (final k in knots) {
+        final Rect r = Rect.fromCenter(center: k, width: trunkW * 0.12, height: trunkW * 0.08);
+        final Paint knot = Paint()
+          ..shader = ui.Gradient.radial(
+            r.center,
+            r.width * 0.6,
+            [const Color(0xFF5D4037), const Color(0xFF3E2723)],
+            const [0, 1],
+          );
+        canvas.drawOval(r, knot);
+        // léger bord clair pour le volume
+        canvas.drawOval(r.deflate(0.6), Paint()
+          ..color = Colors.white.withValues(alpha: 0.05)
+          ..style = PaintingStyle.stroke
+          ..strokeWidth = 1.0);
+      }
+    }
+    // racines avec léger relief (plusieurs bosses qui sortent de l'herbe)
+    {
+      final Offset base = _treeBase;
+      // socle discret
+      final double moundW = trunkW * 2.1;
+      final Rect mound = Rect.fromCenter(center: base.translate(0, 2), width: moundW, height: 8);
+      final Offset moundTop = Offset(mound.center.dx, mound.top);
+      final Offset moundBottom = Offset(mound.center.dx, mound.bottom);
+      final Paint moundPaint = Paint()
+        ..shader = ui.Gradient.linear(
+          moundTop,
+          moundBottom,
+          [const Color(0xFF6D4C41), const Color(0xFF4E342E)],
+          const [0, 1],
+        );
+      canvas.drawOval(mound, moundPaint);
+
+      // petites bosses de racines (relief)
+  const List<double> offs = [-0.7, -0.45, -0.2, 0.0, 0.2, 0.45, 0.7];
+      for (int i = 0; i < offs.length; i++) {
+        final double d = offs[i].abs();
+        final double dx = offs[i] * trunkW * 0.72;
+        final double w = trunkW * (0.70 - 0.18 * d);
+        final double h = 6.5 + 2.5 * (1.0 - d);
+        final Rect bump = Rect.fromCenter(center: base.translate(dx, -2.0), width: w, height: h);
+        final Offset bumpTop = Offset(bump.center.dx, bump.top);
+        final Offset bumpBottom = Offset(bump.center.dx, bump.bottom);
+        final Paint bumpPaint = Paint()
+          ..shader = ui.Gradient.linear(
+            bumpTop,
+            bumpBottom,
+            [const Color(0xFF8D6E63), const Color(0xFF5D4037)],
+            const [0, 1],
+          );
+        canvas.drawOval(bump, bumpPaint);
+        // fin liseré pour suggérer le volume (pas une ombre portée)
+        final Path cap = Path()..addArc(bump.deflate(1.2), pi, pi);
+        canvas.drawPath(
+          cap,
+          Paint()
+            ..color = Colors.white.withValues(alpha: 0.08)
+            ..style = PaintingStyle.stroke
+            ..strokeWidth = 1.2,
+        );
+      }
+
+      // quelques stries
+      final Paint groove = Paint()
+        ..color = const Color(0xFF3E2723).withValues(alpha: 0.18)
+        ..strokeWidth = 1.0
+        ..style = PaintingStyle.stroke
+        ..strokeCap = StrokeCap.round;
+      canvas.drawLine(base.translate(-trunkW * 0.30, -2), base.translate(-trunkW * 0.15, 3), groove);
+      canvas.drawLine(base.translate(trunkW * 0.25, -2), base.translate(trunkW * 0.10, 3), groove);
+    }
+  // (ombre portée statique supprimée — remplacée par l'ombre directionnelle ci-dessus)
 
   // feuillage (multi-nappes) — couvre bien le haut du tronc (utilise les valeurs calculées)
   final canopyCenter = _canopyCenter;
   final canopyR = _canopyR;
+  // Pendant la phase 0 de descente, dessiner le serpent sous la canopée pour éviter l'effet "dans les airs"
+  final bool snakeUnderCanopyNow = _snakeAlive && _scene == 2 && _snakeDescendT > 0 && _snakeDescendPhase == 0;
+  if (snakeUnderCanopyNow) {
+    _renderSnake(canvas, sp);
+  }
     void blob(Offset c, double r, List<Color> colors) {
       final p = Paint()
         ..shader = ui.Gradient.radial(c.translate(-r * 0.2, -r * 0.15), r, colors, const [0.0, 1.0]);
@@ -705,25 +953,13 @@ class GardenMenuGame extends FlameGame {
   blob(canopyCenter.translate(-canopyR * 0.35, -canopyR * 0.12), canopyR * 0.78, const [Color(0xFF81C784), Color(0xFF388E3C)]);
   blob(canopyCenter.translate(canopyR * 0.36, -canopyR * 0.08), canopyR * 0.74, const [Color(0xFF81C784), Color(0xFF2E7D32)]);
   blob(canopyCenter.translate(0, canopyR * 0.05), canopyR * 0.56, const [Color(0xFFA5D6A7), Color(0xFF43A047)]);
-  // surbrillance et ombre directionnelles sur le feuillage
-  final Paint foliageHL = Paint()
-    ..shader = ui.Gradient.radial(canopyCenter - dir * (canopyR * 0.25), canopyR,
-  [Colors.white.withValues(alpha: 0.10 * dayAmt), Colors.transparent], const [0, 1]);
-  canvas.drawCircle(canopyCenter, canopyR * 1.1, foliageHL);
-  final Paint foliageShade = Paint()
-    ..shader = ui.Gradient.radial(canopyCenter + dir * (canopyR * 0.35), canopyR,
-  [Colors.black.withValues(alpha: 0.12), Colors.transparent], const [0, 1]);
-  canvas.drawCircle(canopyCenter, canopyR * 1.2, foliageShade);
+  // (surbrillance/ombre statiques du feuillage supprimées pour retirer l'ombre des feuilles)
 
     // fourmilière (petit dôme sur l'herbe)
     {
       final Offset base = _hillPos;
       final double r = _hillR;
-      // ombre au sol
-      canvas.drawOval(
-        Rect.fromCenter(center: base.translate(0, 6), width: r * 2.3, height: 7),
-        Paint()..color = Colors.black.withValues(alpha: 0.20),
-      );
+  // (ombre de la fourmilière retirée)
       // dôme
       final Rect dome = Rect.fromCenter(center: base.translate(0, -r * 0.4), width: r * 2.2, height: r * 1.6);
       final Paint domePaint = Paint()
@@ -757,12 +993,16 @@ class GardenMenuGame extends FlameGame {
       canvas.drawCircle(hPos, 2.2, Paint()..color = Colors.white.withValues(alpha: 0.32 * dayAmt));
     }
     // pommes tombées (au sol)
-    for (final fa in _falling) {
-      final center = fa.p;
+  for (final fa in _falling) {
+    final center = fa.p;
   const double r = 7.0;
-      // simple drop shadow
-      canvas.drawCircle(center.translate(1.5, 2), r, Paint()..color = Colors.black.withValues(alpha: 0.1));
-      // body
+    // shadow pilotée par le soleil (directionnelle)
+    final Offset ldirA = (center - sp);
+    final double dlA = ldirA.distance == 0 ? 1 : ldirA.distance;
+    final Offset nvA = Offset(ldirA.dx / dlA, ldirA.dy / dlA);
+  final Rect appleShadow = Rect.fromCenter(center: center + nvA * 4.0, width: r * 2.8, height: r * 1.3);
+  canvas.drawOval(appleShadow, Paint()..color = Colors.black.withValues(alpha: 0.22 * dayAmt));
+    // body
   final Paint body = Paint()..color = const Color(0xFFE53935);
       canvas.save();
       canvas.translate(center.dx, center.dy);
@@ -787,46 +1027,54 @@ class GardenMenuGame extends FlameGame {
 
   // (plus de fourmis de scénette)
 
-  // ants (menu) — arrière-plan par rapport aux fleurs/touffes
+  // serpent façon in-game (dessin du trail) — arrière-plan
+  if (!snakeUnderCanopyNow) {
+    _renderSnake(canvas, sp);
+  }
+
+  // fourmis — sous les fleurs et les touffes (masquées par la végétation)
   for (final a in _ants) {
-      // shadow
-  canvas.drawOval(Rect.fromCenter(center: a.p.translate(0, 2), width: 12, height: 4), Paint()..color = Colors.black.withValues(alpha: 0.26));
+      // ombre directionnelle en fonction du soleil
+      final Offset ldir = (a.p - sp);
+      final double dl = ldir.distance == 0 ? 1 : ldir.distance;
+      final Offset nv = Offset(ldir.dx / dl, ldir.dy / dl);
+  final Rect antShadow = Rect.fromCenter(center: a.p + nv * 3.2, width: 14, height: 4.6);
+  canvas.drawOval(antShadow, Paint()..color = Colors.black.withValues(alpha: 0.28 * dayAmt));
       final ang = a.dir;
       canvas.save();
       canvas.translate(a.p.dx, a.p.dy);
       canvas.rotate(ang);
-  final body = Paint()..color = const Color(0xFF4E342E);
+      final body = Paint()..color = const Color(0xFF4E342E);
       canvas.drawCircle(const Offset(-6, 0), 3.8, body);
       canvas.drawCircle(const Offset(0, 0), 3.2, body);
       canvas.drawCircle(const Offset(6, 0), 2.7, body);
-  // petit éclat côté lumière sur le thorax
   final Offset ap = a.p;
-  final Offset ldir = (ap - sp);
-  final double d = ldir.distance == 0 ? 1 : ldir.distance;
-  final Offset n = Offset(ldir.dx / d, ldir.dy / d);
-  canvas.drawCircle(n * -2.5, 1.0, Paint()..color = Colors.white.withValues(alpha: 0.22 * dayAmt));
-      // legs (3 per side)
+  final Offset ldirAnt = (ap - sp);
+  final double d = ldirAnt.distance == 0 ? 1 : ldirAnt.distance;
+  final Offset n = Offset(ldirAnt.dx / d, ldirAnt.dy / d);
+      canvas.drawCircle(n * -2.5, 1.0, Paint()..color = Colors.white.withValues(alpha: 0.22 * dayAmt));
       final leg = Paint()
         ..color = const Color(0xFF3E2723)
         ..strokeWidth = 1.2
         ..strokeCap = StrokeCap.round;
       for (int i = -1; i <= 1; i++) {
         final double ox = i * 4.0;
-        // left
         canvas.drawLine(Offset(ox, 0), Offset(ox - 3, 3), leg);
-        // right
         canvas.drawLine(Offset(ox, 0), Offset(ox + 3, 3), leg);
       }
       canvas.restore();
     }
 
-  // serpent façon in-game (dessin du trail) — arrière-plan
-  _renderSnake(canvas, sp);
-
-  // fleurs — deuxième plan (devant fourmis/serpent, derrière les touffes)
+  // fleurs — deuxième plan
     for (int i = 0; i < _flowers.length; i++) {
       final c = _flowers[i];
       final col = _flowerColors[i];
+  // Ombre directionnelle au sol de la fleur
+  final Offset ldirF = (c - sp);
+  final double dlF = ldirF.distance == 0 ? 1 : ldirF.distance;
+  final Offset nvF = Offset(ldirF.dx / dlF, ldirF.dy / dlF);
+  final Rect flowerShadow = Rect.fromCenter(center: c.translate(0, 8) + nvF * 3.0, width: 10, height: 3.2);
+  canvas.drawOval(flowerShadow, Paint()..color = Colors.black.withValues(alpha: 0.20 * dayAmt));
       canvas.drawLine(c.translate(0, 8), c.translate(0, -6), Paint()..color = const Color(0xFF33691E)..strokeWidth = 2);
       final petal = Paint()..color = col;
       for (int k = 0; k < 5; k++) {
@@ -842,7 +1090,7 @@ class GardenMenuGame extends FlameGame {
       canvas.drawCircle(c.translate(0, -6), 2.6, Paint()..color = const Color(0xFFFFF59D));
     }
 
-  // touffes d'herbe en premier plan pour masquer fourmis/serpent/fleurs si nécessaire
+  // touffes d'herbe en deuxième plan
   _drawTufts(canvas, sp, dayAmt);
 
   // fireflies (au-dessus du décor). Visible surtout la nuit
@@ -872,7 +1120,39 @@ class _MAnt {
   Offset p;
   double dir;
   double speed;
-  _MAnt({required this.p, required this.dir, required this.speed});
+  // Scripted orbit params (menu scene)
+  bool orbiting;
+  Offset orbitCenter;
+  double orbitR;
+  double orbitEccY; // ellipse vertical scaling
+  double orbitOmega; // angular speed (rad/s), sign=direction
+  double orbitPhase;
+  bool isAttacking;
+  // Emerging state: ants coming out of the hill then blending into orbit
+  bool emerging;
+  Offset emergeDir;
+  double emergeT;
+  double emergeDur;
+  // Attack targeting: choose a specific segment index on the snake body
+  int attackTargetSegIdx;
+  double retargetT;
+  // Origin flag: true for ants spawned by the apple-impact burst
+  bool fromBurst;
+  _MAnt({required this.p, required this.dir, required this.speed})
+      : orbiting = false,
+        orbitCenter = Offset.zero,
+        orbitR = 0,
+        orbitEccY = 1,
+        orbitOmega = 1,
+        orbitPhase = 0,
+        isAttacking = false,
+        emerging = false,
+        emergeDir = const Offset(1, 0),
+        emergeT = 0.0,
+        emergeDur = 0.0,
+        attackTargetSegIdx = -1,
+  retargetT = 0.0,
+  fromBurst = false;
 }
 
 class _Cloud {
@@ -1003,13 +1283,251 @@ class _Firefly {
 
 }
 
+// FSM du menu: extrait pour exécuter au début de update
+extension _MenuScene on GardenMenuGame {
+  void _updateScene(double dt) {
+    if (!_sceneInit) {
+      _sceneInit = true;
+      _scene = 0;
+      _sceneTimer = 0.0;
+      _disableRespawn = true; // empêcher le respawn avant l'apparition scriptée
+      _scriptAppleIdx = null;
+      _sceneAntsSpawned = false;
+    }
+    _sceneTimer += dt;
+    switch (_scene) {
+      case 0:
+        if (_scriptAppleIdx == null) {
+          // Revenir au spawn d'avant: un point plausible sous la canopée
+          final ang = _rng.nextDouble() * pi * 2;
+          final rr = _canopyR * (0.2 + _rng.nextDouble() * 0.6);
+          final start = _canopyCenter + Offset(cos(ang) * rr, -_canopyR * 0.2);
+          final vx = (_rng.nextDouble() * 20 - 10);
+          _falling.add(_FallingApple(p: start, v: Offset(vx, 0), spin: _rng.nextDouble() * 6.283));
+          _scriptAppleIdx = _falling.length - 1;
+        }
+        if (_sceneTimer > 1.0) {
+          _scene = 1;
+          _sceneTimer = 0.0;
+        }
+        break;
+      case 1:
+        if (_scriptAppleIdx != null && _scriptAppleIdx! < _falling.length) {
+          final fa = _falling[_scriptAppleIdx!];
+          if (fa.rest) {
+            // Ligne droite vers l'entrée de la fourmilière (légèrement à gauche du trou)
+            final Offset target = _hillPos.translate(-_hillR * 0.9, -_hillR * 0.05);
+            final Offset toT = target - fa.p;
+            final double d = toT.distance;
+            if (d > 1.0) {
+              const double rollSpeed = 80.0; // px/s (encore un peu plus rapide)
+              final Offset step = toT / d * (rollSpeed * dt);
+              Offset next = fa.p + step;
+              if ((next - target).distance > d) next = target; // pas de dépassement
+              fa.p = next; // pas de clamp Y -> vraie ligne droite
+            } else {
+              _sceneApplePos = fa.p;
+              // Attendre 1s avant de faire apparaître le serpent
+              _snakeAppearDelay = 1.0;
+              // Burst de fourmis sortant de la fourmilière (échelonné)
+              _burstToSpawn = 5 + _rng.nextInt(4); // 5..8
+              _burstSpawnInterval = 0.25 + _rng.nextDouble() * 0.35; // 0.25..0.6s
+              _burstSpawnTimer = 0.1; // légère latence avant la première sortie
+              _scene = 2;
+              _sceneTimer = 0.0;
+            }
+          }
+        } else {
+          // Récupération: si l'index est invalide (rare), on recrée une pomme scriptée et on reste en scène 1
+          final ang = _rng.nextDouble() * pi * 2;
+          final rr = _canopyR * (0.2 + _rng.nextDouble() * 0.6);
+          final start = _canopyCenter + Offset(cos(ang) * rr, -_canopyR * 0.2);
+          final vx = (_rng.nextDouble() * 20 - 10);
+          _falling.add(_FallingApple(p: start, v: Offset(vx, 0), spin: _rng.nextDouble() * 6.283));
+          _scriptAppleIdx = _falling.length - 1;
+        }
+        break;
+      case 2:
+        // Apparition du serpent avec délai de 1s après l'arrivée de la pomme
+        if (_snakeAppearDelay > 0) {
+          _snakeAppearDelay = max(0.0, _snakeAppearDelay - dt);
+          if (_snakeAppearDelay == 0.0 && !_snakeAlive) {
+            _snakeHp = _snakeMaxHp;
+            // Rester invisibile visuellement pendant la phase feuilles (rendu sous canopée)
+            _snakeAlive = true;
+            // Points clés du chemin (canopée -> tronc -> sol -> herbe)
+            final double trunkW = _treeHeight * 0.14;
+            final Offset trunkTop = _treeBase - Offset(0, _treeHeight * 0.82);
+            // spawn sur la canopée (bord des feuilles) proche de l'axe du tronc
+            final double startAng = -pi / 2 + (_rng.nextBool() ? -0.5 : 0.5);
+            // Départ précisément sur le bord intérieur de la canopée
+            final Offset p0 = _canopyCenter + Offset(cos(startAng) * _canopyR * 0.85, sin(startAng) * _canopyR * 0.85);
+            // point d'accroche proche du haut du tronc (contrôle Bezier)
+            final Offset p1 = Offset(ui.lerpDouble(p0.dx, trunkTop.dx, 0.6)!, ui.lerpDouble(p0.dy, trunkTop.dy, 0.6)! - trunkW * 0.2);
+            final Offset p2 = trunkTop.translate(0, trunkW * 0.20);
+            final Offset p3 = _treeBase.translate(0, -10);
+            // petite sortie sur l'herbe, côté aléatoire
+            final double side = _rng.nextBool() ? 1.0 : -1.0;
+            final Offset p4 = _treeBase.translate(side * max(36.0, trunkW * 1.8), -8);
+            _snakeP0 = p0; _snakeP1 = p1; _snakeP2 = p2; _snakeP3 = p3; _snakeP4 = p4;
+            // position initiale: feuilles
+            _mHead = p0;
+            final Offset initDirV = _snakeP2! - _snakeP0!;
+            final double initDirLen = initDirV.distance == 0 ? 1.0 : initDirV.distance;
+            _mDir = Offset(initDirV.dx / initDirLen, initDirV.dy / initDirLen);
+            _segments
+              ..clear()
+              ..addAll(List.generate(_snakeHp, (i) => _mHead - _mDir * (_trailSpacing * i)));
+            // préparer les phases: feuilles->tronc, tronc, herbe
+            _snakePhaseDur0 = 0.9; // Bezier sur les feuilles
+            _snakePhaseDur1 = 1.2; // glisse tronc
+            _snakePhaseDur2 = 0.6; // petite sortie herbe
+            _snakeDescendPhase = 0;
+            _snakeDescendDur = _snakePhaseDur0;
+            _snakeDescendT = _snakeDescendDur;
+          }
+        }
+          if (_snakeDescendT > 0 && _snakeAlive) {
+          final double t = (_snakeDescendDur - _snakeDescendT) / (_snakeDescendDur <= 0 ? 1.0 : _snakeDescendDur);
+          // easing doux (easeInOutCubic)
+          double te;
+          if (t < 0.5) {
+            te = 4 * t * t * t;
+          } else {
+            final double u = 2 * t - 2;
+            te = 0.5 * u * u * u + 1;
+          }
+          Offset newHead = _mHead;
+          if (_snakeDescendPhase == 0 && _snakeP0 != null && _snakeP1 != null && _snakeP2 != null) {
+            // Bezier quadratique feuilles -> haut du tronc
+            final Offset a = _snakeP0!;
+            final Offset b = _snakeP1!;
+            final Offset c = _snakeP2!;
+            final double s = 1.0 - te;
+            newHead = a * (s * s) + b * (2 * s * te) + c * (te * te);
+          } else if (_snakeDescendPhase == 1 && _snakeP2 != null && _snakeP3 != null) {
+            // glisse verticale le long du tronc avec légère ondulation
+            final Offset start = _snakeP2!;
+            final Offset end = _snakeP3!;
+            final double swayAmp = (_treeHeight * 0.14) * 0.12;
+            final double sway = sin(te * pi * 1.5) * swayAmp * (1.0 - te);
+            final double y = ui.lerpDouble(start.dy, end.dy, te)!;
+            final double x = _treeBase.dx + sway;
+            newHead = Offset(x, y);
+          } else if (_snakeDescendPhase == 2 && _snakeP3 != null && _snakeP4 != null) {
+            // petite sortie sur l'herbe
+            final Offset start = _snakeP3!;
+            final Offset end = _snakeP4!;
+            newHead = Offset(ui.lerpDouble(start.dx, end.dx, te)!, ui.lerpDouble(start.dy, end.dy, te)!);
+          }
+          // orienter la tête vers le mouvement
+          final Offset delta = newHead - _mHead;
+          final double d = delta.distance;
+          if (d > 1e-4) {
+            _mDir = delta / d;
+          }
+          _mHead = newHead;
+          _segments
+            ..clear()
+            ..addAll(List.generate(_snakeHp, (i) => _mHead - _mDir * (_trailSpacing * i)));
+          _snakeDescendT = max(0.0, _snakeDescendT - dt);
+          // phase suivante
+          if (_snakeDescendT == 0.0) {
+            _snakeDescendPhase += 1;
+            if (_snakeDescendPhase == 1) {
+              _snakeDescendDur = _snakePhaseDur1; _snakeDescendT = _snakeDescendDur;
+            } else if (_snakeDescendPhase == 2) {
+              _snakeDescendDur = _snakePhaseDur2; _snakeDescendT = _snakeDescendDur;
+            } else {
+              // fin du script: libérer l'errance
+              _snakeDescendDur = 0.0;
+              _snakeDescendT = 0.0;
+            }
+          }
+        }
+        // Ne faire sortir les fourmis que lorsque la pomme a atteint sa position finale
+        if (!_sceneAntsSpawned && _sceneTimer > 0.1 && _sceneApplePos != null) {
+          _sceneAntsSpawned = true;
+          // Les fourmis orbitent autour de la fourmilière, pas autour de la pomme
+          final Offset center = _hillPos;
+          for (int i = 0; i < 10; i++) {
+            final double phase = (i / 10.0) * 2 * pi + _rng.nextDouble() * 0.6;
+            final double r = (_hillR * 1.1) + _rng.nextDouble() * (_hillR * 0.7);
+            const double eccY = 0.6;
+            final double omega = (_rng.nextBool() ? 1.0 : -1.0) * (0.6 + _rng.nextDouble() * 0.6);
+            final Offset pos = center + Offset(cos(phase) * r, sin(phase) * r * eccY);
+            final ant = _MAnt(
+              p: pos,
+              dir: phase + pi / 2,
+              speed: 16 + _rng.nextDouble() * 20,
+            );
+            ant.orbiting = true;
+            ant.orbitCenter = center;
+            ant.orbitR = r;
+            ant.orbitEccY = eccY;
+            ant.orbitOmega = omega;
+            ant.orbitPhase = phase;
+            _ants.add(ant);
+          }
+        }
+        if (_sceneTimer > 1.5) {
+          // Aller directement à l'état final sans tuer le serpent
+          _scene = 4;
+          _sceneTimer = 0.0;
+        }
+        break;
+      case 3:
+        // Scène de transition (plus de mort forcée)
+        _disableRespawn = true;
+        if (_sceneTimer > 0.5) {
+          _scene = 4;
+          _sceneTimer = 0.0;
+        }
+        break;
+      case 4:
+        _disableRespawn = true;
+        // Maintenir un anneau d'orbite pour les fourmis non-burst; laisser les burst errer indéfiniment
+        for (final a in _ants) {
+          if (!a.fromBurst) {
+            a.orbiting = true;
+            a.orbitCenter = _hillPos;
+            if (a.orbitR == 0) {
+              a.orbitR = (_hillR * 1.1) + _rng.nextDouble() * (_hillR * 0.7);
+              a.orbitPhase = _rng.nextDouble() * pi * 2;
+              a.orbitOmega = (_rng.nextBool() ? 1.0 : -1.0) * (0.6 + _rng.nextDouble() * 0.6);
+              a.orbitEccY = 0.6;
+            }
+          }
+        }
+        break;
+    }
+  }
+}
+
 extension _MenuRender on GardenMenuGame {
   void _renderSnake(Canvas canvas, Offset sp) {
     if (!_snakeAlive || _segments.isEmpty || _snakeHp <= 0) return;
+    // Clip optionnel: pendant la phase 0 (feuilles), on clip le dessin à la canopée pour éviter de voir le serpent "dans les airs"
+    bool clipped = false;
+    if (_scene == 2 && _snakeDescendT > 0 && _snakeDescendPhase == 0) {
+      final Path canopyClip = Path();
+      // Approximation de la canopée par un grand ovale centré sur _canopyCenter
+      final Rect canopyOval = Rect.fromCircle(center: _canopyCenter, radius: _canopyR);
+      canopyClip.addOval(canopyOval);
+      canvas.save();
+      canvas.clipPath(canopyClip);
+      clipped = true;
+    }
     final int count = _segments.length;
     for (int i = count - 1; i >= 0; i--) {
       final double t = count <= 1 ? 0.0 : i / (count - 1);
       final double r = 4.5 + 5.0 * (1.0 - t);
+  // Ombre directionnelle des segments (aplatie au sol, décalée par le soleil)
+  final Offset ldirS = (_segments[i] - sp);
+  final double dlS = ldirS.distance == 0 ? 1 : ldirS.distance;
+  final Offset nvS = Offset(ldirS.dx / dlS, ldirS.dy / dlS);
+  final Rect segShadow = Rect.fromCenter(center: _segments[i] + nvS * 3.0, width: r * 2.0, height: r * 0.9);
+  canvas.drawOval(segShadow, Paint()..color = Colors.black.withValues(alpha: 0.24 * 0.9));
       final Color col = Color.lerp(const Color(0xFF2E7D32), const Color(0xFF66BB6A), 1.0 - t)!.withValues(alpha: 0.95);
       final Offset p = _segments[i];
       canvas.drawCircle(p, r, Paint()..color = col);
@@ -1020,7 +1538,7 @@ extension _MenuRender on GardenMenuGame {
         ..shader = ui.Gradient.radial(p - n * (r * 0.4), r, [Colors.white.withValues(alpha: 0.10), Colors.transparent], const [0, 1]);
       canvas.drawCircle(p, r, hl);
     }
-    // head details (eyes)
+  // head details (eyes)
     final Offset head = _mHead;
     final Offset perp = Offset(-_mDir.dy, _mDir.dx);
     void reptileEye(Offset c, {bool flip = false}) {
@@ -1035,17 +1553,21 @@ extension _MenuRender on GardenMenuGame {
     }
   reptileEye(head + perp * -4.0 + const Offset(0, -0.6));
   reptileEye(head + perp * 4.0 + const Offset(0, -0.6), flip: true);
+    if (clipped) {
+      canvas.restore();
+    }
   }
 }
 // Petites fonctions utilitaires pour dessiner des touffes d'herbe
 extension _TuftsRender on GardenMenuGame {
   void _drawTufts(Canvas canvas, Offset sp, double dayAmt) {
     for (final t in _tufts) {
-      // ombre au sol
-      canvas.drawOval(
-        Rect.fromCenter(center: t.p.translate(0, 3 * t.s), width: 12 * t.s, height: 3.2 * t.s),
-        Paint()..color = Colors.black.withValues(alpha: 0.16),
-      );
+  // ombre au sol, directionnelle selon le soleil
+  final Offset ldir = (t.p - sp);
+  final double dl = ldir.distance == 0 ? 1 : ldir.distance;
+  final Offset nv = Offset(ldir.dx / dl, ldir.dy / dl);
+  final Rect tuftShadow = Rect.fromCenter(center: t.p.translate(0, 0.2 * t.s) + nv * (1.2 * t.s), width: 12 * t.s, height: 3.4 * t.s);
+  canvas.drawOval(tuftShadow, Paint()..color = Colors.black.withValues(alpha: 0.20 * dayAmt));
       // lames remplies (feuilles), avec dégradé base->sommet
   const List<double> angles = [-24, -14, -6, 0, 6, 14, 24];
       for (int k = 0; k < angles.length; k++) {
