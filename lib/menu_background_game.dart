@@ -24,10 +24,29 @@ class GardenMenuGame extends FlameGame {
   final List<_SoilItem> _soilItems = [];
   final List<_FallingApple> _falling = [];
   final List<_Firefly> _flies = [];
+  int _baseFireflyCount = 0; // nombre de lucioles de base (jour), augmenté la nuit
   final List<_Cloud> _clouds = [];
+  // Couche de nuages lointains, plus flous et plus lents
+  final List<_Cloud> _farClouds = [];
   final List<_Tuft> _tufts = [];
+  // cadence d'update pour lucioles (décimation)
+  double _fireflyAcc = 0.0;
   // Horloge globale
   double _time = 0.0;
+  // Textures (pré-rendues) pour performances
+  ui.Picture? _grassTexPic;
+  Rect? _grassTexRect; // zone de destination
+  // (texture de feuilles retirée)
+  // Pré-rendu supplémentaire pour réduire le travail par frame
+  ui.Picture? _soilDecorPic; // pierres + fossiles
+  ui.Picture? _canopyBlobsPic; // grosses nappes de feuillage (avant texture)
+  ui.Picture? _staticDecorPic; // tronc + racines + fourmilière
+  // Clé de cache pour le décor statique (rebuild si la fourmilière change)
+  Offset? _staticKeyHillPos;
+  double? _staticKeyHillR;
+  // Variantes de touffes d'herbe pré‑rendu
+  final List<ui.Picture> _tuftPics = [];
+  final List<double> _tuftPicScales = [0.9, 1.2, 1.5, 1.8, 2.1, 2.4];
 
   // Fourmilière (entrée dessinée sur la lèvre herbe/terre)
   late Offset _hillPos;
@@ -144,7 +163,7 @@ class GardenMenuGame extends FlameGame {
     // Stars (twinkling at night) with stable positions
     _stars
       ..clear()
-      ..addAll(List.generate((size.x * 0.3).clamp(40, 140).toInt(), (i) {
+      ..addAll(List.generate((size.x * 0.18).clamp(30, 90).toInt(), (i) {
         return _MStar(
           pos: Offset(_rng.nextDouble() * size.x, _rng.nextDouble() * (_groundTop * 0.9)),
           phase: _rng.nextDouble() * 6.283,
@@ -153,9 +172,9 @@ class GardenMenuGame extends FlameGame {
         );
       }));
 
-      // Fourmilière: positionnée sur la lèvre herbe/terre (avant le spawn des fourmis)
-      _hillPos = Offset(size.x * 0.74, size.y - _soilH);
-      _hillR = (size.x * 0.03).clamp(14.0, 24.0);
+  // Fourmilière: rayon puis position (légèrement plus haute que la lèvre herbe/terre)
+  _hillR = (size.x * 0.03).clamp(14.0, 24.0);
+  _hillPos = Offset(size.x * 0.74, (size.y - _soilH) - _hillR * 1.5);
 
   // Ants: aucune au départ (elles sortiront pendant la scène scriptée)
   _ants.clear();
@@ -180,13 +199,22 @@ class GardenMenuGame extends FlameGame {
     final double soilTop = size.y - _soilH;
     final double soilBottom = size.y;
     final int stones = (size.x / 30).clamp(8, 44).toInt();
+    // Palette des cailloux identique au jeu
+    const List<Color> stonePalette = [
+      Color(0xFFECEFF1), // very light
+      Color(0xFFCFD8DC),
+      Color(0xFFB0BEC5),
+      Color(0xFF90A4AE),
+      Color(0xFF757575),
+      Color(0xFF616161),
+      Color(0xFF424242), // dark
+    ];
     for (int i = 0; i < stones; i++) {
       final x = rnd.nextDouble() * size.x;
       final r = 2.4 + rnd.nextDouble() * 5.6;
       final double margin = r + 1.0; // garder la pierre dans la terre
       final y = rnd.nextDouble() * (soilBottom - soilTop - margin * 2) + soilTop + margin;
-      final g = (190 + rnd.nextInt(50)).clamp(170, 235);
-  final col = Color.fromARGB(255, g, g, g).withValues(alpha: 0.95);
+      final Color col = stonePalette[rnd.nextInt(stonePalette.length)].withValues(alpha: 0.95);
       _soilItems.add(_SoilItem.stone(Offset(x, y), r, col, ex: 0.7 + rnd.nextDouble() * 0.7));
     }
     // Un peu plus de fossiles, placés avec marges en fonction de leur taille
@@ -209,19 +237,30 @@ class GardenMenuGame extends FlameGame {
         final double maxY = (size.y - _soilH - 18).clamp(minY + 4, size.y - _soilH - 18);
         final y = _rng.nextDouble() * (maxY - minY) + minY;
         final scale = 0.9 + _rng.nextDouble() * 1.8; // plus hautes
-        return _Tuft(Offset(x, y), scale);
+        // variante de picture la plus proche
+        int vi = 0; double best = double.infinity;
+        for (int k = 0; k < _tuftPicScales.length; k++) {
+          final d = (scale - _tuftPicScales[k]).abs();
+          if (d < best) { best = d; vi = k; }
+        }
+        return _Tuft(Offset(x, y), scale, vi);
       }));
+    // Construire/cacher les variantes de touffes si vide
+    if (_tuftPics.isEmpty) {
+      for (final s in _tuftPicScales) {
+        _tuftPics.add(_makeTuftPicture(s));
+      }
+    }
 
     // Effects: reset falling apples and fireflies
     _falling.clear();
+    _baseFireflyCount = (size.x / 40).clamp(14, 36).toInt();
     _flies
       ..clear()
-      ..addAll(List.generate((size.x / 40).clamp(14, 36).toInt(), (i) {
-        // spawn around canopy, some closer to ground near trunk
-        final ang = _rng.nextDouble() * pi * 2;
-        final rr = _canopyR * (0.3 + _rng.nextDouble() * 0.9);
-        final base = _canopyCenter + Offset(cos(ang) * rr, sin(ang) * rr * 0.7);
-  final f = _Firefly(
+      ..addAll(List.generate(_baseFireflyCount, (i) {
+        // spawn uniformément dans toute la canopée visible (union des nappes circulaires)
+        final Offset base = _sampleLeafPoint();
+        final f = _Firefly(
           p: base + Offset(_rng.nextDouble() * 30 - 15, _rng.nextDouble() * 20 - 10),
           phase: _rng.nextDouble() * pi * 2,
           speed: 0.6 + _rng.nextDouble() * 0.8,
@@ -240,6 +279,15 @@ class GardenMenuGame extends FlameGame {
       }));
 
     // Nuages doux (jour), positions stables mais dépendantes de la taille
+    _farClouds
+      ..clear()
+      ..addAll(List.generate((size.x / 320).clamp(2, 4).toInt(), (i) {
+        final x = _rng.nextDouble() * size.x;
+        final y = _rng.nextDouble() * (_groundTop * 0.55) + 6; // plus haut et plus loin
+        final r = 34.0 + _rng.nextDouble() * 28.0; // un peu plus gros
+        final speed = 1.5 + _rng.nextDouble() * 2.2; // beaucoup plus lents
+        return _Cloud(pos: Offset(x, y), r: r, speed: speed);
+      }));
   _clouds
       ..clear()
       ..addAll(List.generate((size.x / 260).clamp(2, 5).toInt(), (i) {
@@ -272,6 +320,260 @@ class GardenMenuGame extends FlameGame {
       ..clear()
       ..addAll(List.generate(_snakeHp, (i) => _mHead - _mDir * (_trailSpacing * i)));
     _trail.clear(); // on n'utilise plus la trail éparse pour le rendu
+    // Construire les textures pré-rendues (herbe + canopée)
+    _buildCachedTextures();
+  }
+
+  // Construit les textures pré-rendues pour l'herbe et la canopée
+  void _buildCachedTextures() {
+    // Texture d'herbe
+    final Rect grass = Rect.fromLTWH(0, _groundTop, size.x, size.y - _groundTop);
+    _grassTexRect = grass;
+    _grassTexPic = _makeGrassTexturePicture(Size(grass.width, grass.height));
+
+  // Texture de canopée retirée
+
+  // Blocs de feuillage (gros gradients) pré-rendus
+  final Rect canopyBlobsRect = Rect.fromCircle(center: _canopyCenter, radius: _canopyR * 1.05);
+  _canopyBlobsPic = _makeCanopyBlobsPicture(canopyBlobsRect);
+
+  // Décor de sol (pierres + fossiles) pré-rendu
+  final Rect soil = Rect.fromLTWH(0, size.y - _soilH, size.x, _soilH);
+  _soilDecorPic = _makeSoilDecorPicture(soil);
+
+  // Décor statique (tronc, racines, fourmilière)
+  _staticDecorPic = _makeStaticDecorPicture();
+  }
+
+  // Génère une image de texture d'herbe (pré-rendue)
+  ui.Picture _makeGrassTexturePicture(Size texSize) {
+    final recorder = ui.PictureRecorder();
+    final Canvas c = Canvas(recorder);
+    c.save();
+    c.clipRect(Rect.fromLTWH(0, 0, texSize.width, texSize.height));
+    final double gStep = max(12.0, min(26.0, texSize.width / 40));
+    final randGrass = Random(2025);
+    final Paint bladeDark = Paint()
+      ..color = const Color(0xFF0F3D16).withValues(alpha: 0.10)
+      ..strokeWidth = 1.0
+      ..style = PaintingStyle.stroke
+      ..strokeCap = StrokeCap.round;
+    final Paint bladeLight = Paint()
+      ..color = Colors.white.withValues(alpha: 0.06)
+      ..strokeWidth = 0.8
+      ..style = PaintingStyle.stroke
+      ..strokeCap = StrokeCap.round;
+    for (double y = 6; y < texSize.height; y += gStep) {
+      for (double x = 0; x < texSize.width; x += gStep) {
+        final double ox = x + (randGrass.nextDouble() - 0.5) * gStep * 0.6;
+        final double oy = y + (randGrass.nextDouble() - 0.5) * gStep * 0.6;
+        final double h = gStep * (0.7 + randGrass.nextDouble() * 0.6);
+        final double bend = (randGrass.nextDouble() * 0.6 - 0.3);
+        final Path p = Path()
+          ..moveTo(ox, oy)
+          ..quadraticBezierTo(ox + h * bend * 0.3, oy - h * 0.6, ox + h * bend, oy - h);
+        c.drawPath(p, bladeDark);
+        final Path p2 = Path()
+          ..moveTo(ox + 1.0, oy)
+          ..quadraticBezierTo(ox + h * bend * 0.35 + 1.0, oy - h * 0.55, ox + h * bend + 1.0, oy - h * 0.95);
+        c.drawPath(p2, bladeLight);
+      }
+    }
+    c.restore();
+    return recorder.endRecording();
+  }
+
+
+  // Grosse forme de canopée (nappes circulaires) pré-rendue
+  ui.Picture _makeCanopyBlobsPicture(Rect canopyRect) {
+    final recorder = ui.PictureRecorder();
+    final Canvas c = Canvas(recorder);
+    // Décaler l'origine pour dessiner en coordonnées locales du picture
+    c.translate(-canopyRect.left, -canopyRect.top);
+    void blob(Offset center, double r, List<Color> colors) {
+      final Paint p = Paint()
+        ..shader = ui.Gradient.radial(center.translate(-r * 0.2, -r * 0.15), r, colors, const [0.0, 1.0]);
+      c.drawCircle(center, r, p);
+    }
+    final Offset canopyCenter = _canopyCenter;
+    final double canopyR = _canopyR;
+    blob(canopyCenter, canopyR * 1.00, const [Color(0xFF66BB6A), Color(0xFF2E7D32)]);
+    blob(canopyCenter.translate(-canopyR * 0.35, -canopyR * 0.12), canopyR * 0.78, const [Color(0xFF81C784), Color(0xFF388E3C)]);
+    blob(canopyCenter.translate(canopyR * 0.36, -canopyR * 0.08), canopyR * 0.74, const [Color(0xFF81C784), Color(0xFF2E7D32)]);
+    blob(canopyCenter.translate(0, canopyR * 0.05), canopyR * 0.56, const [Color(0xFFA5D6A7), Color(0xFF43A047)]);
+    return recorder.endRecording();
+  }
+
+  // Pierres + fossiles pré-rendus
+  ui.Picture _makeSoilDecorPicture(Rect soilRect) {
+    final recorder = ui.PictureRecorder();
+    final Canvas c = Canvas(recorder);
+    // Clip pour rester dans la terre
+    c.clipRect(Rect.fromLTWH(soilRect.left, soilRect.top + 4, soilRect.width, soilRect.height - 4));
+    for (final it in _soilItems) {
+      it.render(c);
+    }
+    return recorder.endRecording();
+  }
+
+  // Picture d'une touffe d'herbe (base à l'origine, pousse vers -Y)
+  ui.Picture _makeTuftPicture(double s) {
+    final recorder = ui.PictureRecorder();
+    final Canvas canvas = Canvas(recorder);
+    // feuilles remplies avec dégradé base->sommet (statique)
+    const List<double> angles = [-24, -14, -6, 0, 6, 14, 24];
+    for (int k = 0; k < angles.length; k++) {
+      final double ang = angles[k] * pi / 180.0;
+      final double baseW = (1.6 + (k % 3) * 0.3) * s;
+      final double h = (11 + (k % 2) * 3 + (k == 3 ? 4 : 0)) * s;
+      final Offset up = Offset(sin(ang), -cos(ang));
+      final Offset right = Offset(cos(ang), sin(ang));
+      final Offset base = Offset.zero;
+      final Offset tip = base + up * h;
+      final Path leaf = Path()
+        ..moveTo(base.dx - right.dx * baseW, base.dy - right.dy * baseW)
+        ..quadraticBezierTo(
+          (base.dx + tip.dx) / 2 - up.dx * h * 0.15,
+          (base.dy + tip.dy) / 2 - up.dy * h * 0.15,
+          tip.dx,
+          tip.dy,
+        )
+        ..quadraticBezierTo(
+          (base.dx + tip.dx) / 2 + up.dx * h * 0.10,
+          (base.dy + tip.dy) / 2 + up.dy * h * 0.10,
+          base.dx + right.dx * baseW,
+          base.dy + right.dy * baseW,
+        )
+        ..close();
+      const Color c0 = Color(0xFF1E6020);
+      const Color c1 = Color(0xFF4CAF50);
+      final Paint leafPaint = Paint()
+        ..shader = ui.Gradient.linear(
+          base.translate(0, 0),
+          tip,
+          [c0, Color.lerp(c0, c1, 0.8)!.withValues(alpha: 0.92)],
+          const [0, 1],
+        );
+      canvas.drawPath(leaf, leafPaint);
+    }
+    return recorder.endRecording();
+  }
+
+  // Tronc, racines et fourmilière pré-rendus (statique)
+  ui.Picture _makeStaticDecorPicture() {
+    final recorder = ui.PictureRecorder();
+    final Canvas canvas = Canvas(recorder);
+    // tronc
+    final double trunkW = _treeHeight * 0.14;
+    final Rect trunkRect = Rect.fromLTWH(_treeBase.dx - trunkW / 2, _treeBase.dy - _treeHeight, trunkW, _treeHeight);
+    final Paint trunkGrad = Paint()
+      ..shader = ui.Gradient.linear(trunkRect.topLeft, trunkRect.bottomLeft, [const Color(0xFF8D6E63), const Color(0xFF6D4C41), const Color(0xFF5D4037)], const [0.0, 0.6, 1.0]);
+    canvas.drawRRect(RRect.fromRectAndRadius(trunkRect, const Radius.circular(8)), trunkGrad);
+    // texture d'écorce
+    const int lines = 9;
+    for (int i = 0; i < lines; i++) {
+      final double fx = (i + 1) / (lines + 1);
+      final double amp = 0.8 + (i % 3) * 0.5;
+      final double phase = i * 0.9;
+      final Paint darkStroke = Paint()
+        ..color = const Color(0xFF3E2723).withValues(alpha: 0.18)
+        ..style = PaintingStyle.stroke
+        ..strokeWidth = 1.2
+        ..strokeCap = StrokeCap.round;
+      final Path path = Path();
+      double y = trunkRect.top + 6;
+      const double step = 10;
+      final double x0 = trunkRect.left + trunkW * fx;
+      path.moveTo(x0, y);
+      while (y < trunkRect.bottom - 6) {
+        y += step;
+        final double t = (y - trunkRect.top) / trunkRect.height;
+        final double x = x0 + sin(t * pi * 2.0 + phase) * amp;
+        path.lineTo(x, y);
+      }
+      canvas.drawPath(path, darkStroke);
+    }
+    const List<double> hi = [0.22, 0.48, 0.74];
+    for (int i = 0; i < hi.length; i++) {
+      final double fx = hi[i];
+      final double amp = 0.6 + i * 0.2;
+      final double phase = 0.4 + i * 0.7;
+      final Paint lightStroke = Paint()
+        ..color = Colors.white.withValues(alpha: 0.07)
+        ..style = PaintingStyle.stroke
+        ..strokeWidth = 0.9
+        ..strokeCap = StrokeCap.round;
+      final Path path = Path();
+      double y = trunkRect.top + 8;
+      const double step = 12;
+      final double x0 = trunkRect.left + trunkW * fx;
+      path.moveTo(x0, y);
+      while (y < trunkRect.bottom - 8) {
+        y += step;
+        final double t = (y - trunkRect.top) / trunkRect.height;
+        final double x = x0 + sin(t * pi * 2.0 + phase) * amp;
+        path.lineTo(x, y);
+      }
+      canvas.drawPath(path, lightStroke);
+    }
+    final List<Offset> knots = <Offset>[
+      Offset(trunkRect.left + trunkW * 0.30, trunkRect.top + trunkRect.height * 0.28),
+      Offset(trunkRect.left + trunkW * 0.55, trunkRect.top + trunkRect.height * 0.38),
+      Offset(trunkRect.left + trunkW * 0.40, trunkRect.top + trunkRect.height * 0.52),
+      Offset(trunkRect.left + trunkW * 0.66, trunkRect.top + trunkRect.height * 0.62),
+      Offset(trunkRect.left + trunkW * 0.34, trunkRect.top + trunkRect.height * 0.72),
+      Offset(trunkRect.left + trunkW * 0.58, trunkRect.top + trunkRect.height * 0.82),
+    ];
+    for (final k in knots) {
+      final Rect r = Rect.fromCenter(center: k, width: trunkW * 0.12, height: trunkW * 0.08);
+      final Paint knot = Paint()
+        ..shader = ui.Gradient.radial(r.center, r.width * 0.6, [const Color(0xFF5D4037), const Color(0xFF3E2723)], const [0, 1]);
+      canvas.drawOval(r, knot);
+      canvas.drawOval(r.deflate(0.6), Paint()
+        ..color = Colors.white.withValues(alpha: 0.05)
+        ..style = PaintingStyle.stroke
+        ..strokeWidth = 1.0);
+    }
+    // racines
+    final Offset base = _treeBase;
+    final double moundW = trunkW * 2.1;
+    final Rect mound = Rect.fromCenter(center: base.translate(0, 2), width: moundW, height: 8);
+    final Paint moundPaint = Paint()
+      ..shader = ui.Gradient.linear(Offset(mound.center.dx, mound.top), Offset(mound.center.dx, mound.bottom), [const Color(0xFF6D4C41), const Color(0xFF4E342E)], const [0, 1]);
+    canvas.drawOval(mound, moundPaint);
+    const List<double> offs = [-0.7, -0.45, -0.2, 0.0, 0.2, 0.45, 0.7];
+    for (int i = 0; i < offs.length; i++) {
+      final double d = offs[i].abs();
+      final double dx = offs[i] * trunkW * 0.72;
+      final double w = trunkW * (0.70 - 0.18 * d);
+      final double h = 6.5 + 2.5 * (1.0 - d);
+      final Rect bump = Rect.fromCenter(center: base.translate(dx, -2.0), width: w, height: h);
+      final Paint bumpPaint = Paint()
+        ..shader = ui.Gradient.linear(Offset(bump.center.dx, bump.top), Offset(bump.center.dx, bump.bottom), [const Color(0xFF8D6E63), const Color(0xFF5D4037)], const [0, 1]);
+      canvas.drawOval(bump, bumpPaint);
+      final Path cap = Path()..addArc(bump.deflate(1.2), pi, pi);
+      canvas.drawPath(cap, Paint()
+        ..color = Colors.white.withValues(alpha: 0.08)
+        ..style = PaintingStyle.stroke
+        ..strokeWidth = 1.2);
+    }
+    // fourmilière
+    final Offset hBase = _hillPos;
+    final double hr = _hillR;
+  final Offset domeCenter = hBase.translate(0, -hr * 0.4);
+  final Rect dome = Rect.fromCenter(center: domeCenter, width: hr * 2.2, height: hr * 1.6);
+    final Paint domePaint = Paint()
+      ..shader = ui.Gradient.linear(dome.topLeft, dome.bottomLeft, [const Color(0xFF7A5A4A), const Color(0xFF5A4034)], const [0, 1]);
+    canvas.drawOval(dome, domePaint);
+  // Trou légèrement plus bas depuis le sommet du dôme
+  final Offset holeCenter = Offset(dome.center.dx, dome.top + hr * 0.30);
+  final Rect hole = Rect.fromCenter(center: holeCenter, width: hr * 0.9, height: hr * 0.35);
+    canvas.drawOval(hole, Paint()..color = const Color(0xFF2E1F1A).withValues(alpha: 0.85));
+    // liseré léger (statique)
+  canvas.drawOval(Rect.fromCenter(center: hole.center.translate(0, -hole.height * 0.12), width: hole.width, height: hole.height),
+      Paint()..color = Colors.white.withValues(alpha: 0.06));
+
+    return recorder.endRecording();
   }
 
   // (vision culling désactivé)
@@ -471,8 +773,49 @@ class GardenMenuGame extends FlameGame {
       if (ahead.dy > maxY) steerY = (maxY - ahead.dy) / lookAhead;
       final Offset boundarySteer = Offset(steerX, steerY);
 
-      // combiner: direction d’errance + recentrage + évitement
-      Offset blended = dir * 0.80 + centerPull * 0.55 + boundarySteer * 0.90;
+      // Anti-bloquage dans les coins: petite poussée diagonale pour sortir d'un coin
+      Offset cornerAvoid = Offset.zero;
+      {
+        final double dL = _mHead.dx - minX;
+        final double dR = maxX - _mHead.dx;
+        final double dT = _mHead.dy - minY;
+        final double dB = maxY - _mHead.dy;
+        final double nearX = min(dL, dR);
+        final double nearY = min(dT, dB);
+        const double cornerThresh = 28.0;
+        if (nearX < cornerThresh && nearY < cornerThresh) {
+          final double sx = dL < dR ? 1.0 : -1.0; // pousser vers le centre en X
+          final double sy = dT < dB ? 1.0 : -1.0; // pousser vers le centre en Y
+          final double fx = (cornerThresh - nearX) / cornerThresh;
+          final double fy = (cornerThresh - nearY) / cornerThresh;
+          final double f = max(fx, fy).clamp(0.0, 1.0);
+          final double n = sqrt(sx * sx + sy * sy);
+          cornerAvoid = Offset(sx / n, sy / n) * f; // vecteur diagonal normalisé
+        }
+      }
+
+      // Fuite des fourmis: vecteur de répulsion si des fourmis sont proches (optimisé: distances au carré)
+      const double fleeR = 70.0; // rayon d'influence de la fuite
+      const double fleeR2 = fleeR * fleeR;
+      Offset flee = Offset.zero;
+      int fleeCount = 0;
+      for (final ant in _ants) {
+        final Offset dv = _mHead - ant.p; // vecteur loin de la fourmi
+        final double dd2 = dv.dx * dv.dx + dv.dy * dv.dy;
+        if (dd2 > 1e-6 && dd2 < fleeR2) {
+          final double dd = sqrt(dd2);
+          final double w = (fleeR - dd) / fleeR; // 0..1 (plus fort si très proche)
+          flee += dv / dd * w;
+          fleeCount++;
+        }
+      }
+      if (fleeCount > 0) {
+        final double mag = flee.distance;
+        if (mag > 1e-6) flee = flee / mag; // normaliser le vecteur de fuite
+      }
+
+  // combiner: errance + recentrage + évitement bords + anti-corner + fuite des fourmis
+  Offset blended = dir * 0.70 + centerPull * 0.45 + boundarySteer * 0.90 + cornerAvoid * 0.95 + flee * 1.15;
       final double m = blended.distance;
       if (m > 1e-6) blended = blended / m;
       _mDir = blended;
@@ -505,12 +848,15 @@ class GardenMenuGame extends FlameGame {
       // Dégâts des fourmis: si une fourmi touche un segment, réduire la longueur (HP)
       if (_dmgCooldown <= 0) {
         const double biteR = 8.0; // rayon d'impact légèrement plus grand
+        const double biteR2 = biteR * biteR;
         bool gotBitten = false;
         // tester tête + segments
         for (final ant in _ants) {
-          if ((ant.p - _mHead).distance <= biteR) { gotBitten = true; break; }
+          final Offset dvh = ant.p - _mHead;
+          if (dvh.dx * dvh.dx + dvh.dy * dvh.dy <= biteR2) { gotBitten = true; break; }
           for (int i = 1; i < _segments.length; i++) {
-            if ((ant.p - _segments[i]).distance <= biteR) { gotBitten = true; break; }
+            final Offset dvs = ant.p - _segments[i];
+            if (dvs.dx * dvs.dx + dvs.dy * dvs.dy <= biteR2) { gotBitten = true; break; }
           }
           if (gotBitten) break;
         }
@@ -549,7 +895,9 @@ class GardenMenuGame extends FlameGame {
           _segments
             ..clear()
             ..addAll(List.generate(_snakeHp, (i) => _mHead - _mDir * (_trailSpacing * i)));
-        }
+          // Construire les textures pré-rendues (herbe + canopée)
+          _buildCachedTextures();
+  }
       }
     }
 
@@ -580,10 +928,63 @@ class GardenMenuGame extends FlameGame {
       }
     }
 
-    // fireflies: déplacement erratique 2D autour de l'arbre (toutes directions)
-    for (final f in _flies) {
+  // fireflies: déplacement erratique 2D (décimation d'update pour réduire le coût)
+    const double fireflyStep = 1.0 / 45.0; // ~45 Hz
+    _fireflyAcc += dt;
+    final bool doUpdateFireflies = _fireflyAcc >= fireflyStep;
+    if (doUpdateFireflies) _fireflyAcc -= fireflyStep;
+
+    // Danse de paire: de temps en temps, deux lucioles proches tournent ensemble puis se séparent
+    if (_flies.length >= 2 && _rng.nextDouble() < min(0.5 * dt, 0.02)) {
+      // choisir une luciole non appariée
+      final int i = _rng.nextInt(_flies.length);
+      if (!_flies[i].pairing && _flies[i].pairWith == -1) {
+        // trouver une voisine proche
+        int j = -1; double best = 9999999;
+        for (int k = 0; k < _flies.length; k++) {
+          if (k == i) continue;
+          if (_flies[k].pairing || _flies[k].pairWith != -1) continue;
+          final double d2 = (_flies[k].p - _flies[i].p).distanceSquared;
+          if (d2 < best) { best = d2; j = k; }
+        }
+        if (j != -1 && best < 80 * 80) {
+          final Offset mid = (_flies[i].p + _flies[j].p) * 0.5;
+          final double rad = 10 + _rng.nextDouble() * 12;
+          final double omega = (_rng.nextBool() ? 1 : -1) * (1.8 + _rng.nextDouble() * 1.8);
+          final double dur = 1.2 + _rng.nextDouble() * 1.0;
+          _flies[i].pairing = true; _flies[i].pairWith = j; _flies[i].pairT = dur; _flies[i].pairCenter = mid; _flies[i].pairOmega = omega;
+          _flies[j].pairing = true; _flies[j].pairWith = i; _flies[j].pairT = dur; _flies[j].pairCenter = mid; _flies[j].pairOmega = omega;
+          // aligner phases opposées pour la rotation
+          _flies[j].phase = _flies[i].phase + pi;
+          // léger ajustement positions initiales
+          _flies[i].p = mid + Offset(rad, 0);
+          _flies[j].p = mid - Offset(rad, 0);
+        }
+      }
+    }
+
+    for (int i = 0; i < _flies.length; i++) {
+      final f = _flies[i];
       // phase pour bruit pseudo-aléatoire et scintillement
       f.phase += dt * f.localSpeed;
+      if (!doUpdateFireflies) continue; // sauter l'intégration positionnelle cette frame
+
+      // gérer la durée de la danse en paire
+      if (f.pairing) {
+        f.pairT -= dt;
+        if (f.pairT <= 0) {
+          final int j = f.pairWith;
+          f.pairing = false;
+          f.pairWith = -1;
+          f.pairT = 0;
+          if (j >= 0 && j < _flies.length) {
+            final g = _flies[j];
+            g.pairing = false;
+            g.pairWith = -1;
+            g.pairT = 0;
+          }
+        }
+      }
 
       // attraction douce vers une feuille (cible renouvelée périodiquement)
       f.targetT += dt;
@@ -594,17 +995,32 @@ class GardenMenuGame extends FlameGame {
       }
       // bruit 2D: combinaisons sinusoïdales indépendantes pour X/Y
       final double t = _time;
-      final double nx = (sin(f.seed * 1.3 + t * 1.7) + sin(f.seed * 2.1 + t * 2.3 + 1.2)) * 0.5;
-      final double ny = (cos(f.seed * 1.5 + t * 1.1) + sin(f.seed * 2.7 + t * 2.0 + 0.7)) * 0.5;
+  final double nx = (sin(f.seed * 1.3 + t * 1.7) + sin(f.seed * 2.1 + t * 2.3 + 1.2)) * 0.5;
+  final double ny = (cos(f.seed * 1.5 + t * 1.1) + sin(f.seed * 2.7 + t * 2.0 + 0.7)) * 0.5;
       final Offset noiseA = Offset(nx, ny) * f.jitter; // px/s^2
 
-      // force vers la cible
-      Offset toT = f.target - f.p;
-      final double d = toT.distance;
-      if (d > 0.001) {
-        toT = toT / d * 12.0;
+      // force principale
+      Offset toT;
+      if (f.pairing) {
+        // orbitage autour du centre partagé
+        Offset toC = f.p - f.pairCenter;
+        double r = toC.distance;
+        if (r < 0.001) {
+          // éviter une tangente indéfinie
+          toC = const Offset(1, 0);
+          r = 1;
+        }
+        final Offset tangent = Offset(-toC.dy / r, toC.dx / r) * (f.pairOmega * 12.0);
+        final Offset keep = (f.pairCenter - f.p) * 4.0; // attraction douce vers le centre
+        toT = tangent + keep;
       } else {
-        toT = Offset.zero; // ~px/s^2
+        toT = f.target - f.p;
+        final double d = toT.distance;
+        if (d > 0.001) {
+          toT = toT / d * 12.0;
+        } else {
+          toT = Offset.zero; // ~px/s^2
+        }
       }
 
       // freinage
@@ -620,26 +1036,30 @@ class GardenMenuGame extends FlameGame {
       }
 
       // tentative de nouvelle position
-      Offset p = f.p + f.v * dt;
+    Offset p = f.p + f.v * dt;
 
-  // contrainte: rester proche de l'arbre (ellipse plus large et plus haute)
-  final double rx = _canopyR * 2.6;
-  final double ry = _canopyR * 2.1;
-      Offset rel = p - _canopyCenter;
-      double norm = (rel.dx * rel.dx) / (rx * rx) + (rel.dy * rel.dy) / (ry * ry);
-      if (norm > 1.0) {
-        final double k = 1 / sqrt(norm);
-        // repositionner sur le bord et refléter une partie de la vitesse
-        final Offset newPos = _canopyCenter + rel * k;
-        final Offset nrm = rel == Offset.zero ? const Offset(0, -1) : rel / rel.distance; // normal
-        final double vn = f.v.dx * nrm.dx + f.v.dy * nrm.dy;
-        f.v = f.v - nrm * (vn * 1.4);
-        p = newPos;
-      }
+  // contrainte: rester DANS une grande ellipse englobante de la canopée (beaucoup plus large)
+  final double rx = _fireflyRx(); // demi-axe horizontal
+  final double ry = _fireflyRy(); // demi-axe vertical
+    Offset rel = p - _canopyCenter;
+    double norm = (rel.dx * rel.dx) / (rx * rx) + (rel.dy * rel.dy) / (ry * ry);
+    if (norm > 1.0) {
+      final double k = 1 / sqrt(norm);
+      final Offset newPos = _canopyCenter + Offset(rel.dx * k, rel.dy * k);
+      // normale de l'ellipse: gradient de x^2/rx^2 + y^2/ry^2 - 1 = 0
+      Offset nrm = Offset(rel.dx / (rx * rx), rel.dy / (ry * ry));
+      final double nlen = nrm.distance == 0 ? 1 : nrm.distance;
+      nrm = nrm / nlen;
+      final double vn = f.v.dx * nrm.dx + f.v.dy * nrm.dy;
+      f.v = f.v - nrm * (vn * 1.4);
+      p = newPos;
+    }
 
-      // éviter la terre
-  final double minY = max(0, _groundTop - _canopyR * 1.4); // zone plus haute
-      final double maxY = size.y - _soilH - 12;
+  // (ancienne contrainte union-de-blobs supprimée)
+
+  // éviter la terre tout en respectant l'ellipse d'aire verticale
+  final double minY = max(0.0, _canopyCenter.dy - _fireflyRy());
+  final double maxY = min(size.y - _soilH - 12, _canopyCenter.dy + _fireflyRy());
       if (p.dy < minY) {
         p = Offset(p.dx, minY);
         f.v = Offset(f.v.dx, f.v.dy.abs() * 0.6);
@@ -662,6 +1082,12 @@ class GardenMenuGame extends FlameGame {
     }
 
     // déplacement lent des nuages le jour (toujours mis à jour, rendu faible la nuit)
+    for (final cl in _farClouds) {
+      cl.pos = cl.pos.translate(cl.speed * dt, 0);
+      if (cl.pos.dx - cl.r * 2 > size.x) {
+        cl.pos = Offset(-cl.r * 2, cl.pos.dy);
+      }
+    }
     for (final cl in _clouds) {
       cl.pos = cl.pos.translate(cl.speed * dt, 0);
       if (cl.pos.dx - cl.r * 2 > size.x) {
@@ -677,16 +1103,50 @@ class GardenMenuGame extends FlameGame {
     }
 
   // (la FSM a été gérée en début de frame)
+
+  // Ajuster la population de lucioles: +30% la nuit, -0% le jour
+    {
+      final double theta = _t * 2 * pi;
+      final double dayAmt = 0.5 + 0.5 * sin(theta);
+      final double nightAmt = 1.0 - dayAmt;
+      final int desired = (_baseFireflyCount * (1.0 + 0.30 * nightAmt)).round();
+      if (_flies.length < desired && _rng.nextDouble() < min(3.0 * dt, 0.5)) {
+  // spawn 1 luciole uniforme dans la canopée visible
+  final Offset base = _sampleLeafPoint();
+        final f = _Firefly(
+          p: base + Offset(_rng.nextDouble() * 30 - 15, _rng.nextDouble() * 20 - 10),
+          phase: _rng.nextDouble() * pi * 2,
+          speed: 0.6 + _rng.nextDouble() * 0.8,
+        );
+        f.localSpeed = 1.0 + _rng.nextDouble() * 1.6;
+        f.maxSpd = 24.0 + _rng.nextDouble() * 36.0;
+        f.jitter = 30.0 + _rng.nextDouble() * 45.0;
+        f.damping = 1.2 + _rng.nextDouble() * 1.2;
+        f.v = Offset(_rng.nextDouble() * 10 - 5, _rng.nextDouble() * 10 - 5);
+        f.target = _sampleLeafPoint();
+        f.targetDur = 2.0 + _rng.nextDouble() * 3.0;
+        _flies.add(f);
+      } else if (_flies.length > desired && _rng.nextDouble() < min(2.0 * dt, 0.4)) {
+        // retirer en douceur
+        _flies.removeLast();
+      }
+    }
   }
 
-  // échantillonner un point plausible sur le volume des feuilles (canopée)
+  // Paramètres ellipse d'aire des lucioles (très large)
+  double _fireflyRx() => _canopyR * 1.85;
+  double _fireflyRy() => _canopyR * 1.70;
+
+  // Échantillonner uniformément dans une grande ellipse englobant la canopée
   Offset _sampleLeafPoint() {
+    final double rx = _fireflyRx();
+    final double ry = _fireflyRy();
     final double a = _rng.nextDouble() * pi * 2;
-    // biais radial pour privilégier la périphérie
-    final double rr = _canopyR * sqrt(0.35 + 0.65 * _rng.nextDouble());
-    final Offset p = _canopyCenter + Offset(cos(a) * rr, sin(a) * rr * 0.85);
-    return p;
+    final double r = sqrt(_rng.nextDouble()); // uniforme en aire sur le disque unité
+    return _canopyCenter + Offset(cos(a) * rx * r, sin(a) * ry * r);
   }
+
+  // (anciens helpers union-de-blobs supprimés; ellipse englobante utilisée à la place)
 
   @override
   void render(Canvas canvas) {
@@ -712,11 +1172,13 @@ class GardenMenuGame extends FlameGame {
       );
     canvas.drawRect(sky, skyPaint);
 
-  // Twinkling stars crossfaded by nightAmt (no abrupt pop)
-    for (final s in _stars) {
-      final a = 0.45 + 0.55 * (0.5 + 0.5 * sin(_time * s.speed + s.phase));
-  final Paint p = Paint()..color = Colors.white.withValues(alpha: a * (nightAmt * nightAmt));
-      canvas.drawCircle(s.pos, s.radius, p);
+  // Twinkling stars crossfaded by nightAmt (no abrupt pop); skip when quasi-jour
+    if (nightAmt > 0.05) {
+      for (final s in _stars) {
+        final a = 0.45 + 0.55 * (0.5 + 0.5 * sin(_time * s.speed + s.phase));
+        final Paint p = Paint()..color = Colors.white.withValues(alpha: a * (nightAmt * nightAmt));
+        canvas.drawCircle(s.pos, s.radius, p);
+      }
     }
 
     // soleil/lune en orbite elliptique
@@ -729,38 +1191,58 @@ class GardenMenuGame extends FlameGame {
   final Paint halo = Paint()
       ..shader = ui.Gradient.radial(sp, sunR * 3, [const Color(0xFFFFF59D).withValues(alpha: 0.35 * dayAmt), Colors.transparent], const [0, 1]);
     canvas.drawCircle(sp, sunR * 3, halo);
+  // Couleur du ciel au niveau Y pour occlure les étoiles sous le soleil
+  final Color skyBottom = Color.lerp(const Color(0xFF0D47A1), const Color(0xFF061126), nightAmt)!;
+  final Color skyTop = Color.lerp(const Color(0xFF90CAF9), const Color(0xFF0B1530), nightAmt)!;
+  double vSun = (_groundTop - sp.dy) / _groundTop; vSun = vSun.clamp(0.0, 1.0);
+  final Color skyAtSun = Color.lerp(skyBottom, skyTop, vSun)!;
+  canvas.drawCircle(sp, sunR, Paint()..color = skyAtSun);
+  // Disque solaire avec estompage (alpha selon dayAmt) rendu au-dessus
   final Paint body = Paint()
-      ..shader = ui.Gradient.radial(sp, sunR, const [Color(0xFFFFF176), Color(0xFFFFC107)], const [0, 1])
-  ..colorFilter = ui.ColorFilter.mode(Colors.white.withValues(alpha: dayAmt.clamp(0.0, 1.0)), BlendMode.modulate);
-    canvas.drawCircle(sp, sunR, body);
+    ..shader = ui.Gradient.radial(sp, sunR, const [Color(0xFFFFF176), Color(0xFFFFC107)], const [0, 1])
+    ..colorFilter = ui.ColorFilter.mode(Colors.white.withValues(alpha: dayAmt.clamp(0.0, 1.0)), BlendMode.modulate);
+  canvas.drawCircle(sp, sunR, body);
 
     // lune en opposition de phase
   const double moonR = 13.0;
     final Offset mp = c + Offset(cos(theta + pi) * rx, -sin(theta + pi) * ry);
+  // Halo (estompage par nightAmt)
   final Paint mHalo = Paint()
       ..shader = ui.Gradient.radial(mp, moonR * 2.4, [const Color(0xFFB3E5FC).withValues(alpha: 0.28 * nightAmt), Colors.transparent], const [0, 1]);
-    canvas.drawCircle(mp, moonR * 2.4, mHalo);
+  canvas.drawCircle(mp, moonR * 2.4, mHalo);
+  // Occlusion étoiles sous la lune avec la couleur du ciel à cette hauteur
+  double vMoon = (_groundTop - mp.dy) / _groundTop; vMoon = vMoon.clamp(0.0, 1.0);
+  final Color skyAtMoon = Color.lerp(skyBottom, skyTop, vMoon)!;
+  canvas.drawCircle(mp, moonR, Paint()..color = skyAtMoon);
+  // Disque lunaire avec estompage par nightAmt
   canvas.drawCircle(mp, moonR, Paint()..color = const Color(0xFFE0E6EA).withValues(alpha: nightAmt));
 
-    // Nuages (rendus principalement le jour, légère présence au crépuscule)
-    if (dayAmt > 0) {
-      for (final cl in _clouds) {
-  final double a = (0.35 + 0.5 * dayAmt).clamp(0.0, 0.85);
-  final Paint cp = Paint()..color = const Color(0xFFF5F7FA).withValues(alpha: a);
-        // forme blobby (plusieurs cercles)
-        canvas.drawCircle(cl.pos.translate(-cl.r * 0.6, 0), cl.r * 0.8, cp);
-        canvas.drawCircle(cl.pos, cl.r, cp);
-        canvas.drawCircle(cl.pos.translate(cl.r * 0.6, 0), cl.r * 0.75, cp);
-        // ombre douce en bas
-        final Rect shade = Rect.fromCenter(center: cl.pos.translate(0, cl.r * 0.25), width: cl.r * 2.0, height: cl.r * 0.7);
-        final Paint sh = Paint()
-          ..shader = ui.Gradient.radial(shade.center, shade.width * 0.5, [Colors.black.withValues(alpha: 0.08 * dayAmt), Colors.transparent], const [0, 1]);
-        canvas.drawOval(shade, sh);
-      }
+    // Nuages lointains (plus flous, alpha réduit la nuit) — dessinés d'abord
+    for (final cl in _farClouds) {
+      final double a = (0.10 + 0.38 * dayAmt).clamp(0.08, 0.50);
+      final Paint cp = Paint()
+        ..imageFilter = ui.ImageFilter.blur(sigmaX: cl.r * 0.20, sigmaY: cl.r * 0.20)
+        ..color = const Color(0xFFF5F7FA).withValues(alpha: a);
+      canvas.drawCircle(cl.pos.translate(-cl.r * 0.7, -cl.r * 0.1), cl.r * 0.95, cp);
+      canvas.drawCircle(cl.pos, cl.r * 1.15, cp);
+      canvas.drawCircle(cl.pos.translate(cl.r * 0.7, -cl.r * 0.05), cl.r * 0.9, cp);
+    }
+
+    // Nuages visibles jour et nuit (alpha réduit la nuit)
+    for (final cl in _clouds) {
+      final double a = (0.18 + 0.55 * dayAmt).clamp(0.12, 0.85);
+      final Paint cp = Paint()
+        ..imageFilter = ui.ImageFilter.blur(sigmaX: cl.r * 0.08, sigmaY: cl.r * 0.08)
+        ..color = const Color(0xFFF5F7FA).withValues(alpha: a);
+      // forme blobby (plusieurs cercles)
+      canvas.drawCircle(cl.pos.translate(-cl.r * 0.6, 0), cl.r * 0.8, cp);
+      canvas.drawCircle(cl.pos, cl.r, cp);
+      canvas.drawCircle(cl.pos.translate(cl.r * 0.6, 0), cl.r * 0.75, cp);
+      // (ombre douce retirée des nuages)
     }
 
     // herbe (aucune autre bande en bas)
-  final Rect grass = Rect.fromLTWH(0, _groundTop, size.x, size.y - _groundTop);
+    final Rect grass = Rect.fromLTWH(0, _groundTop, size.x, size.y - _groundTop);
     final Paint grassPaint = Paint()
       ..shader = ui.Gradient.linear(
         grass.topLeft, grass.bottomLeft,
@@ -768,6 +1250,13 @@ class GardenMenuGame extends FlameGame {
         const [0.0, 1.0],
       );
     canvas.drawRect(grass, grassPaint);
+    // Dessiner la texture d'herbe pré-rendue (si disponible)
+    if (_grassTexPic != null && _grassTexRect != null) {
+      canvas.save();
+      canvas.translate(_grassTexRect!.left, _grassTexRect!.top);
+      canvas.drawPicture(_grassTexPic!);
+      canvas.restore();
+    }
   // bande lumineuse directionnelle retirée pour un rendu plus plat sous les fourmis
   // plus de besoin de direction de lumière pour le feuillage (ombres statiques supprimées)
 
@@ -780,161 +1269,34 @@ class GardenMenuGame extends FlameGame {
         const [0.0, 1.0],
       );
     canvas.drawRect(soil, soilPaint);
-  // clip pour que pierres/fossiles ne débordent jamais dans l'herbe
-  canvas.save();
-  canvas.clipRect(soil);
-  // clip pour que pierres/fossiles ne débordent jamais dans l'herbe
+  // décor de sol: utiliser l'image pré-rendue si dispo
+  if (_soilDecorPic != null) {
+    canvas.drawPicture(_soilDecorPic!);
+  } else {
+    // fallback: rendu direct (plus coûteux)
     canvas.save();
     canvas.clipRect(Rect.fromLTWH(soil.left, soil.top + 4, soil.width, soil.height - 4));
     for (final it in _soilItems) {
       it.render(canvas);
     }
     canvas.restore();
-    canvas.restore();
+  }
   // suppression de l'ombre du bord d'herbe sur la terre
 
   // (Les touffes d'herbe seront dessinées en tout premier plan, plus bas)
 
-  // tronc (ancré sur l’herbe) plus détaillé
-  final trunkW = _treeHeight * 0.14;
-  final trunkRect = Rect.fromLTWH(_treeBase.dx - trunkW / 2, _treeBase.dy - _treeHeight, trunkW, _treeHeight);
-  // (pas d'ombre portée pour le tronc — supprimée)
-  final Paint trunkGrad = Paint()
-      ..shader = ui.Gradient.linear(trunkRect.topLeft, trunkRect.bottomLeft, [const Color(0xFF8D6E63), const Color(0xFF6D4C41), const Color(0xFF5D4037)], const [0.0, 0.6, 1.0]);
-    canvas.drawRRect(RRect.fromRectAndRadius(trunkRect, const Radius.circular(8)), trunkGrad);
-    // texture d'écorce (traits ondulés et nœuds subtils, sans ombre portée)
-    {
-  const int lines = 9;
-      for (int i = 0; i < lines; i++) {
-        final double fx = (i + 1) / (lines + 1); // position horizontale dans le tronc
-        final double amp = 0.8 + (i % 3) * 0.5;  // amplitude de l'ondulation
-        final double phase = i * 0.9;
-        final Paint darkStroke = Paint()
-          ..color = const Color(0xFF3E2723).withValues(alpha: 0.18)
-          ..style = PaintingStyle.stroke
-          ..strokeWidth = 1.2
-          ..strokeCap = StrokeCap.round;
-  final Path path = Path();
-        double y = trunkRect.top + 6;
-  const double step = 10;
-  final double x0 = trunkRect.left + trunkW * fx;
-        path.moveTo(x0, y);
-        while (y < trunkRect.bottom - 6) {
-          y += step;
-          final double t = (y - trunkRect.top) / trunkRect.height;
-          final double x = x0 + sin(t * pi * 2.0 + phase) * amp;
-          path.lineTo(x, y);
-        }
-        canvas.drawPath(path, darkStroke);
-      }
-
-      // quelques reflets fins pour accentuer le relief
-  const List<double> hi = [0.22, 0.48, 0.74];
-      for (int i = 0; i < hi.length; i++) {
-        final double fx = hi[i];
-        final double amp = 0.6 + i * 0.2;
-        final double phase = 0.4 + i * 0.7;
-        final Paint lightStroke = Paint()
-          ..color = Colors.white.withValues(alpha: 0.07)
-          ..style = PaintingStyle.stroke
-          ..strokeWidth = 0.9
-          ..strokeCap = StrokeCap.round;
-  final Path path = Path();
-        double y = trunkRect.top + 8;
-  const double step = 12;
-  final double x0 = trunkRect.left + trunkW * fx;
-        path.moveTo(x0, y);
-        while (y < trunkRect.bottom - 8) {
-          y += step;
-          final double t = (y - trunkRect.top) / trunkRect.height;
-          final double x = x0 + sin(t * pi * 2.0 + phase) * amp;
-          path.lineTo(x, y);
-        }
-        canvas.drawPath(path, lightStroke);
-      }
-
-      // petits noeuds d'écorce (plus nombreux)
-  final List<Offset> knots = <Offset>[
-        Offset(trunkRect.left + trunkW * 0.30, trunkRect.top + trunkRect.height * 0.28),
-        Offset(trunkRect.left + trunkW * 0.55, trunkRect.top + trunkRect.height * 0.38),
-        Offset(trunkRect.left + trunkW * 0.40, trunkRect.top + trunkRect.height * 0.52),
-        Offset(trunkRect.left + trunkW * 0.66, trunkRect.top + trunkRect.height * 0.62),
-        Offset(trunkRect.left + trunkW * 0.34, trunkRect.top + trunkRect.height * 0.72),
-        Offset(trunkRect.left + trunkW * 0.58, trunkRect.top + trunkRect.height * 0.82),
-      ];
-      for (final k in knots) {
-        final Rect r = Rect.fromCenter(center: k, width: trunkW * 0.12, height: trunkW * 0.08);
-        final Paint knot = Paint()
-          ..shader = ui.Gradient.radial(
-            r.center,
-            r.width * 0.6,
-            [const Color(0xFF5D4037), const Color(0xFF3E2723)],
-            const [0, 1],
-          );
-        canvas.drawOval(r, knot);
-        // léger bord clair pour le volume
-        canvas.drawOval(r.deflate(0.6), Paint()
-          ..color = Colors.white.withValues(alpha: 0.05)
-          ..style = PaintingStyle.stroke
-          ..strokeWidth = 1.0);
-      }
+  // décor statique (tronc + racines + fourmilière) pré-rendu
+  // Rebuild décor statique si la fourmilière a changé (position/rayon)
+  if (_staticDecorPic == null || _staticKeyHillPos != _hillPos || _staticKeyHillR != _hillR) {
+    _staticDecorPic = _makeStaticDecorPicture();
+    _staticKeyHillPos = _hillPos;
+    _staticKeyHillR = _hillR;
+    // S'assurer que les fourmis orbitent autour de la nouvelle position
+    for (final a in _ants) {
+      if (a.orbiting) a.orbitCenter = _hillPos;
     }
-    // racines avec léger relief (plusieurs bosses qui sortent de l'herbe)
-    {
-      final Offset base = _treeBase;
-      // socle discret
-      final double moundW = trunkW * 2.1;
-      final Rect mound = Rect.fromCenter(center: base.translate(0, 2), width: moundW, height: 8);
-      final Offset moundTop = Offset(mound.center.dx, mound.top);
-      final Offset moundBottom = Offset(mound.center.dx, mound.bottom);
-      final Paint moundPaint = Paint()
-        ..shader = ui.Gradient.linear(
-          moundTop,
-          moundBottom,
-          [const Color(0xFF6D4C41), const Color(0xFF4E342E)],
-          const [0, 1],
-        );
-      canvas.drawOval(mound, moundPaint);
-
-      // petites bosses de racines (relief)
-  const List<double> offs = [-0.7, -0.45, -0.2, 0.0, 0.2, 0.45, 0.7];
-      for (int i = 0; i < offs.length; i++) {
-        final double d = offs[i].abs();
-        final double dx = offs[i] * trunkW * 0.72;
-        final double w = trunkW * (0.70 - 0.18 * d);
-        final double h = 6.5 + 2.5 * (1.0 - d);
-        final Rect bump = Rect.fromCenter(center: base.translate(dx, -2.0), width: w, height: h);
-        final Offset bumpTop = Offset(bump.center.dx, bump.top);
-        final Offset bumpBottom = Offset(bump.center.dx, bump.bottom);
-        final Paint bumpPaint = Paint()
-          ..shader = ui.Gradient.linear(
-            bumpTop,
-            bumpBottom,
-            [const Color(0xFF8D6E63), const Color(0xFF5D4037)],
-            const [0, 1],
-          );
-        canvas.drawOval(bump, bumpPaint);
-        // fin liseré pour suggérer le volume (pas une ombre portée)
-        final Path cap = Path()..addArc(bump.deflate(1.2), pi, pi);
-        canvas.drawPath(
-          cap,
-          Paint()
-            ..color = Colors.white.withValues(alpha: 0.08)
-            ..style = PaintingStyle.stroke
-            ..strokeWidth = 1.2,
-        );
-      }
-
-      // quelques stries
-      final Paint groove = Paint()
-        ..color = const Color(0xFF3E2723).withValues(alpha: 0.18)
-        ..strokeWidth = 1.0
-        ..style = PaintingStyle.stroke
-        ..strokeCap = StrokeCap.round;
-      canvas.drawLine(base.translate(-trunkW * 0.30, -2), base.translate(-trunkW * 0.15, 3), groove);
-      canvas.drawLine(base.translate(trunkW * 0.25, -2), base.translate(trunkW * 0.10, 3), groove);
-    }
-  // (ombre portée statique supprimée — remplacée par l'ombre directionnelle ci-dessus)
+  }
+  canvas.drawPicture(_staticDecorPic!);
 
   // feuillage (multi-nappes) — couvre bien le haut du tronc (utilise les valeurs calculées)
   final canopyCenter = _canopyCenter;
@@ -944,40 +1306,29 @@ class GardenMenuGame extends FlameGame {
   if (snakeUnderCanopyNow) {
     _renderSnake(canvas, sp);
   }
+  // nappes de feuillage: utiliser l'image pré-rendue si dispo
+  if (_canopyBlobsPic != null) {
+    final Rect canopyBlobsRect = Rect.fromCircle(center: canopyCenter, radius: canopyR * 1.05);
+    canvas.save();
+    canvas.translate(canopyBlobsRect.left, canopyBlobsRect.top);
+    canvas.drawPicture(_canopyBlobsPic!);
+    canvas.restore();
+  } else {
+    // fallback: dessiner les blobs directement
     void blob(Offset c, double r, List<Color> colors) {
       final p = Paint()
         ..shader = ui.Gradient.radial(c.translate(-r * 0.2, -r * 0.15), r, colors, const [0.0, 1.0]);
       canvas.drawCircle(c, r, p);
     }
-  blob(canopyCenter, canopyR * 1.00, const [Color(0xFF66BB6A), Color(0xFF2E7D32)]);
-  blob(canopyCenter.translate(-canopyR * 0.35, -canopyR * 0.12), canopyR * 0.78, const [Color(0xFF81C784), Color(0xFF388E3C)]);
-  blob(canopyCenter.translate(canopyR * 0.36, -canopyR * 0.08), canopyR * 0.74, const [Color(0xFF81C784), Color(0xFF2E7D32)]);
-  blob(canopyCenter.translate(0, canopyR * 0.05), canopyR * 0.56, const [Color(0xFFA5D6A7), Color(0xFF43A047)]);
+    blob(canopyCenter, canopyR * 1.00, const [Color(0xFF66BB6A), Color(0xFF2E7D32)]);
+    blob(canopyCenter.translate(-canopyR * 0.35, -canopyR * 0.12), canopyR * 0.78, const [Color(0xFF81C784), Color(0xFF388E3C)]);
+    blob(canopyCenter.translate(canopyR * 0.36, -canopyR * 0.08), canopyR * 0.74, const [Color(0xFF81C784), Color(0xFF2E7D32)]);
+    blob(canopyCenter.translate(0, canopyR * 0.05), canopyR * 0.56, const [Color(0xFFA5D6A7), Color(0xFF43A047)]);
+  }
+  // Texture de feuilles retirée (plus de motif par-dessus la canopée)
   // (surbrillance/ombre statiques du feuillage supprimées pour retirer l'ombre des feuilles)
 
-    // fourmilière (petit dôme sur l'herbe)
-    {
-      final Offset base = _hillPos;
-      final double r = _hillR;
-  // (ombre de la fourmilière retirée)
-      // dôme
-      final Rect dome = Rect.fromCenter(center: base.translate(0, -r * 0.4), width: r * 2.2, height: r * 1.6);
-      final Paint domePaint = Paint()
-        ..shader = ui.Gradient.linear(
-          dome.topLeft, dome.bottomLeft,
-          [const Color(0xFF7A5A4A), const Color(0xFF5A4034)],
-          const [0, 1],
-        );
-      canvas.drawOval(dome, domePaint);
-      // entrée sombre
-      final Rect hole = Rect.fromCenter(center: base.translate(0, -r * 0.05), width: r * 0.9, height: r * 0.45);
-      canvas.drawOval(hole, Paint()..color = const Color(0xFF2E1F1A).withValues(alpha: 0.85));
-      // liseré léger
-      canvas.drawOval(
-        Rect.fromCenter(center: hole.center.translate(0, -hole.height * 0.12), width: hole.width, height: hole.height),
-        Paint()..color = Colors.white.withValues(alpha: 0.06 * dayAmt),
-      );
-    }
+  // fourmilière déjà incluse dans le décor statique
 
     // pommes (dans l'arbre) avec ombrage/speculaire
     final appleBody = Paint()..color = const Color(0xFFE53935);
@@ -1065,7 +1416,10 @@ class GardenMenuGame extends FlameGame {
       canvas.restore();
     }
 
-  // fleurs — deuxième plan
+  // touffes d'herbe en deuxième plan (dessinées avant les fleurs pour que les fleurs passent au-dessus)
+  _drawTufts(canvas, sp, dayAmt);
+
+  // fleurs — au-dessus des touffes
     for (int i = 0; i < _flowers.length; i++) {
       final c = _flowers[i];
       final col = _flowerColors[i];
@@ -1073,7 +1427,7 @@ class GardenMenuGame extends FlameGame {
   final Offset ldirF = (c - sp);
   final double dlF = ldirF.distance == 0 ? 1 : ldirF.distance;
   final Offset nvF = Offset(ldirF.dx / dlF, ldirF.dy / dlF);
-  final Rect flowerShadow = Rect.fromCenter(center: c.translate(0, 8) + nvF * 3.0, width: 10, height: 3.2);
+  final Rect flowerShadow = Rect.fromCenter(center: c.translate(0, 4) + nvF * 2.4, width: 10, height: 3.0);
   canvas.drawOval(flowerShadow, Paint()..color = Colors.black.withValues(alpha: 0.20 * dayAmt));
       canvas.drawLine(c.translate(0, 8), c.translate(0, -6), Paint()..color = const Color(0xFF33691E)..strokeWidth = 2);
       final petal = Paint()..color = col;
@@ -1088,21 +1442,18 @@ class GardenMenuGame extends FlameGame {
   canvas.drawCircle(pc - n * 1.2, 0.9, Paint()..color = Colors.white.withValues(alpha: 0.26 * dayAmt));
       }
       canvas.drawCircle(c.translate(0, -6), 2.6, Paint()..color = const Color(0xFFFFF59D));
-    }
+  }
 
-  // touffes d'herbe en deuxième plan
-  _drawTufts(canvas, sp, dayAmt);
-
-  // fireflies (au-dessus du décor). Visible surtout la nuit
+  // lucioles (au-dessus du décor). Visible surtout la nuit — halo doux réintroduit (sans gradient)
     if (nightAmt > 0) {
       for (final f in _flies) {
         final glow = 0.5 + 0.5 * sin(_time * 3.0 + f.phase);
-  final Color c = const Color(0xFFFFF59D).withValues(alpha: 0.35 * nightAmt + 0.45 * glow * nightAmt);
-        canvas.drawCircle(f.p, 2.6, Paint()..color = c);
-        // small soft halo
-        final Paint halo = Paint()
-          ..shader = ui.Gradient.radial(f.p, 12, [c.withValues(alpha: 0.6), Colors.transparent], const [0, 1]);
-        canvas.drawCircle(f.p, 12, halo);
+        final double coreA = (0.25 * nightAmt + 0.45 * glow * nightAmt).clamp(0.0, 0.85);
+        final double haloA = (0.08 * nightAmt + 0.20 * glow * nightAmt).clamp(0.0, 0.35);
+        // halo large et très doux
+        canvas.drawCircle(f.p, 10, Paint()..color = const Color(0xFFFFF59D).withValues(alpha: haloA));
+        // coeur
+        canvas.drawCircle(f.p, 2.6, Paint()..color = const Color(0xFFFFF59D).withValues(alpha: coreA));
       }
     }
   }
@@ -1165,7 +1516,8 @@ class _Cloud {
 class _Tuft {
   Offset p;
   double s;
-  _Tuft(this.p, this.s);
+  int v; // index de variante picture
+  _Tuft(this.p, this.s, this.v);
 }
 
 enum SoilKind { stone, fossilShell, fossilFish }
@@ -1185,10 +1537,43 @@ class _SoilItem {
   void render(Canvas canvas) {
     switch (kind) {
       case SoilKind.stone:
-        final Rect r = Rect.fromCenter(center: pos, width: size * 2 * ex, height: size * 2);
-        final grad = Paint()
-          ..shader = ui.Gradient.radial(pos, size * 1.2, [color, Colors.black.withValues(alpha: 0.18)], const [0, 1]);
-        canvas.drawOval(r, grad);
+        // Pierre polygonale irrégulière avec léger ombrage
+        final int sides = 6 + (size * 0.6).clamp(0, 3).toInt(); // 6..9 côtés
+        final Path poly = Path();
+        final double baseR = size * 0.9;
+        final double tilt = (rot + 0.8) % (pi * 2);
+        for (int i = 0; i < sides; i++) {
+          final double a = tilt + i * (2 * pi / sides);
+          final double rr = baseR * (0.85 + (i % 2 == 0 ? 0.20 : 0.10));
+          final Offset v = Offset(cos(a) * rr * ex, sin(a) * rr);
+          final Offset p = pos + v;
+          if (i == 0) poly.moveTo(p.dx, p.dy); else poly.lineTo(p.dx, p.dy);
+        }
+        poly.close();
+        // Remplissage
+        canvas.drawPath(poly, Paint()..color = color);
+        // Ombrage latéral (simple)
+        final Paint edge = Paint()
+          ..color = Colors.black.withValues(alpha: 0.18)
+          ..style = PaintingStyle.stroke
+          ..strokeWidth = 1.0;
+        canvas.drawPath(poly, edge);
+        // Facettes internes
+        final Paint facet = Paint()..color = Colors.white.withValues(alpha: 0.05);
+        final Rect bounds = poly.getBounds();
+        final Offset c = bounds.center;
+        final Path facet1 = Path()
+          ..moveTo(c.dx, c.dy)
+          ..lineTo(bounds.left + bounds.width * 0.25, bounds.top + bounds.height * 0.55)
+          ..lineTo(bounds.left + bounds.width * 0.55, bounds.top + bounds.height * 0.25)
+          ..close();
+        canvas.drawPath(facet1, facet);
+        final Path facet2 = Path()
+          ..moveTo(c.dx, c.dy)
+          ..lineTo(bounds.right - bounds.width * 0.20, bounds.top + bounds.height * 0.35)
+          ..lineTo(bounds.left + bounds.width * 0.65, bounds.bottom - bounds.height * 0.15)
+          ..close();
+        canvas.drawPath(facet2, facet);
         break;
       case SoilKind.fossilShell:
         canvas.save();
@@ -1267,6 +1652,12 @@ class _Firefly {
   double jitter;
   double damping;
   Offset v;
+  // pairing temporaire
+  bool pairing;
+  int pairWith; // index de l'autre luciole, -1 si aucun
+  double pairT; // temps restant de la danse
+  Offset pairCenter;
+  double pairOmega;
 
   _Firefly({required this.p, required this.phase, required this.speed})
       : seed = Random().nextDouble() * 6.283,
@@ -1279,10 +1670,16 @@ class _Firefly {
         maxSpd = 30.0,
         jitter = 30.0,
         damping = 1.0,
-        v = Offset.zero;
+        v = Offset.zero,
+        pairing = false,
+        pairWith = -1,
+        pairT = 0.0,
+        pairCenter = Offset.zero,
+        pairOmega = 0.0;
 
 }
 
+// Projection helper for canopy boundary response
 // FSM du menu: extrait pour exécuter au début de update
 extension _MenuScene on GardenMenuGame {
   void _updateScene(double dt) {
@@ -1423,7 +1820,7 @@ extension _MenuScene on GardenMenuGame {
           // orienter la tête vers le mouvement
           final Offset delta = newHead - _mHead;
           final double d = delta.distance;
-          if (d > 1e-4) {
+          if (d > 0.0001) {
             _mDir = delta / d;
           }
           _mHead = newHead;
@@ -1507,11 +1904,9 @@ extension _MenuScene on GardenMenuGame {
 extension _MenuRender on GardenMenuGame {
   void _renderSnake(Canvas canvas, Offset sp) {
     if (!_snakeAlive || _segments.isEmpty || _snakeHp <= 0) return;
-    // Clip optionnel: pendant la phase 0 (feuilles), on clip le dessin à la canopée pour éviter de voir le serpent "dans les airs"
     bool clipped = false;
     if (_scene == 2 && _snakeDescendT > 0 && _snakeDescendPhase == 0) {
       final Path canopyClip = Path();
-      // Approximation de la canopée par un grand ovale centré sur _canopyCenter
       final Rect canopyOval = Rect.fromCircle(center: _canopyCenter, radius: _canopyR);
       canopyClip.addOval(canopyOval);
       canvas.save();
@@ -1522,23 +1917,20 @@ extension _MenuRender on GardenMenuGame {
     for (int i = count - 1; i >= 0; i--) {
       final double t = count <= 1 ? 0.0 : i / (count - 1);
       final double r = 4.5 + 5.0 * (1.0 - t);
-  // Ombre directionnelle des segments (aplatie au sol, décalée par le soleil)
-  final Offset ldirS = (_segments[i] - sp);
-  final double dlS = ldirS.distance == 0 ? 1 : ldirS.distance;
-  final Offset nvS = Offset(ldirS.dx / dlS, ldirS.dy / dlS);
-  final Rect segShadow = Rect.fromCenter(center: _segments[i] + nvS * 3.0, width: r * 2.0, height: r * 0.9);
-  canvas.drawOval(segShadow, Paint()..color = Colors.black.withValues(alpha: 0.24 * 0.9));
+      final Offset ldirS = (_segments[i] - sp);
+      final double dlS = ldirS.distance == 0 ? 1 : ldirS.distance;
+      final Offset nvS = Offset(ldirS.dx / dlS, ldirS.dy / dlS);
+      final Rect segShadow = Rect.fromCenter(center: _segments[i] + nvS * 3.0, width: r * 2.0, height: r * 0.9);
+      canvas.drawOval(segShadow, Paint()..color = Colors.black.withValues(alpha: 0.24 * 0.9));
       final Color col = Color.lerp(const Color(0xFF2E7D32), const Color(0xFF66BB6A), 1.0 - t)!.withValues(alpha: 0.95);
       final Offset p = _segments[i];
       canvas.drawCircle(p, r, Paint()..color = col);
+      // highlight simple (sans gradient) côté lumière
       final Offset ldir = (p - sp);
       final double d = ldir.distance == 0 ? 1 : ldir.distance;
       final Offset n = Offset(ldir.dx / d, ldir.dy / d);
-      final Paint hl = Paint()
-        ..shader = ui.Gradient.radial(p - n * (r * 0.4), r, [Colors.white.withValues(alpha: 0.10), Colors.transparent], const [0, 1]);
-      canvas.drawCircle(p, r, hl);
+      canvas.drawCircle(p - n * (r * 0.4), r * 0.35, Paint()..color = Colors.white.withValues(alpha: 0.07));
     }
-  // head details (eyes)
     final Offset head = _mHead;
     final Offset perp = Offset(-_mDir.dy, _mDir.dx);
     void reptileEye(Offset c, {bool flip = false}) {
@@ -1562,51 +1954,20 @@ extension _MenuRender on GardenMenuGame {
 extension _TuftsRender on GardenMenuGame {
   void _drawTufts(Canvas canvas, Offset sp, double dayAmt) {
     for (final t in _tufts) {
-  // ombre au sol, directionnelle selon le soleil
-  final Offset ldir = (t.p - sp);
-  final double dl = ldir.distance == 0 ? 1 : ldir.distance;
-  final Offset nv = Offset(ldir.dx / dl, ldir.dy / dl);
-  final Rect tuftShadow = Rect.fromCenter(center: t.p.translate(0, 0.2 * t.s) + nv * (1.2 * t.s), width: 12 * t.s, height: 3.4 * t.s);
-  canvas.drawOval(tuftShadow, Paint()..color = Colors.black.withValues(alpha: 0.20 * dayAmt));
-      // lames remplies (feuilles), avec dégradé base->sommet
-  const List<double> angles = [-24, -14, -6, 0, 6, 14, 24];
-      for (int k = 0; k < angles.length; k++) {
-        final double ang = angles[k] * pi / 180.0;
-        final double baseW = (1.6 + (k % 3) * 0.3) * t.s;
-        final double h = (11 + (k % 2) * 3 + (k == 3 ? 4 : 0)) * t.s;
-        final Offset up = Offset(sin(ang), -cos(ang));
-        final Offset right = Offset(cos(ang), sin(ang));
-        final Offset base = t.p + right * (k - (angles.length - 1) / 2) * 1.2 * t.s;
-        final Offset tip = base + up * h;
-        final Path leaf = Path()
-          ..moveTo(base.dx - right.dx * baseW, base.dy - right.dy * baseW)
-          ..quadraticBezierTo(
-            (base.dx + tip.dx) / 2 - up.dx * h * 0.15,
-            (base.dy + tip.dy) / 2 - up.dy * h * 0.15,
-            tip.dx,
-            tip.dy,
-          )
-          ..quadraticBezierTo(
-            (base.dx + tip.dx) / 2 + up.dx * h * 0.10,
-            (base.dy + tip.dy) / 2 + up.dy * h * 0.10,
-            base.dx + right.dx * baseW,
-            base.dy + right.dy * baseW,
-          )
-          ..close();
-        // dégradé directionnel selon le soleil
-        final Offset ldir = (base - sp);
-        final double d = ldir.distance == 0 ? 1 : ldir.distance;
-        final Offset n = Offset(ldir.dx / d, ldir.dy / d);
-  const Color c0 = Color(0xFF1E6020);
-  const Color c1 = Color(0xFF4CAF50);
-        final Paint leafPaint = Paint()
-          ..shader = ui.Gradient.linear(
-            base + n * -2.0,
-            tip + n * 2.0,
-            [c0, Color.lerp(c0, c1, 0.8)!.withValues(alpha: (0.85 + 0.1 * dayAmt))],
-            const [0, 1],
-          );
-        canvas.drawPath(leaf, leafPaint);
+      // ombre simple
+      final Offset ldir = (t.p - sp);
+      final double dl = ldir.distance == 0 ? 1 : ldir.distance;
+      final Offset nv = Offset(ldir.dx / dl, ldir.dy / dl);
+  final double shW = (8.0 * t.s).clamp(5.0, 11.0);
+  final double shH = (2.6 * t.s).clamp(1.8, 3.2);
+  final Rect tuftShadow = Rect.fromCenter(center: t.p.translate(0, -0.6 * t.s) + nv * (0.7 * t.s), width: shW, height: shH);
+  canvas.drawOval(tuftShadow, Paint()..color = Colors.black.withValues(alpha: 0.16 * dayAmt));
+      // picture de touffe
+      if (t.v >= 0 && t.v < _tuftPics.length) {
+        canvas.save();
+        canvas.translate(t.p.dx, t.p.dy);
+        canvas.drawPicture(_tuftPics[t.v]);
+        canvas.restore();
       }
     }
   }

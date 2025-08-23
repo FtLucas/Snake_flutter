@@ -37,9 +37,10 @@ class _Star {
 class _Rock {
   Offset pos;
   double r;
-  double ex; // ellipse x-scale
+  double ex; // x-scale (used to squish polygon on X)
   Color color;
-  _Rock(this.pos, this.r, this.ex, this.color);
+  double rot; // orientation for polygonal shape
+  _Rock(this.pos, this.r, this.ex, this.color, this.rot);
 }
 
 class _Chamber {
@@ -762,8 +763,9 @@ class SnakeGame extends FlameGame {
         Color(0xFF616161),
         Color(0xFF424242), // dark
       ];
-      final Color base = palette[rng.nextInt(palette.length)];
-      _rocks.add(_Rock(Offset(soil.left + x, soil.top + y), r, ex, base));
+  final Color base = palette[rng.nextInt(palette.length)];
+  final double rot = rng.nextDouble() * pi * 2;
+  _rocks.add(_Rock(Offset(soil.left + x, soil.top + y), r, ex, base, rot));
     }
 
     // Grain specks: precompute light/dark tiny dots, avoid the top 4px under the grass edge
@@ -1813,23 +1815,40 @@ class SnakeGame extends FlameGame {
             canvas.drawRect(Rect.fromCenter(center: o, width: 1.5, height: 1.5), grainDark);
           }
         }
-        // Draw rocks with simple shading
+        // Draw rocks (polygonal) with simple shading
         for (final r in _rocks) {
           final Offset p = r.pos;
           if (!soil.contains(p)) continue;
-          final double rx = r.r * r.ex;
-          final double ry = r.r;
-          // base rock: use precomputed palette color (no flicker)
-          final Paint rp = Paint()..color = r.color;
-          canvas.drawOval(Rect.fromCenter(center: p, width: rx * 2, height: ry * 2), rp);
-          // light side highlight based on sun direction
-          final Offset n = Offset(-lightDir.dx, -lightDir.dy);
-          final Offset hp = p + n * (min(rx, ry) * 0.25);
-          final Paint hi = Paint()..color = Colors.white.withValues(alpha: isNight ? 0.10 : 0.16);
-          canvas.drawOval(Rect.fromCenter(center: hp, width: rx * 0.9, height: ry * 0.9), hi);
-          // bottom shadow
-          final Paint sh = Paint()..color = Colors.black.withValues(alpha: isNight ? 0.32 : 0.25);
-          canvas.drawOval(Rect.fromCenter(center: p + Offset(0, ry * 0.3), width: rx * 1.2, height: ry * 0.5), sh);
+          final double baseR = r.r;
+          final int sides = 6 + (baseR * 0.6).clamp(0, 3).toInt();
+          final Path poly = Path();
+          final double tilt = r.rot;
+          for (int i = 0; i < sides; i++) {
+            final double a = tilt + i * (2 * pi / sides);
+            final double rr = baseR * (0.85 + (i % 2 == 0 ? 0.20 : 0.10));
+            final Offset v = Offset(cos(a) * rr * r.ex, sin(a) * rr);
+            final Offset q = p + v;
+            if (i == 0) poly.moveTo(q.dx, q.dy); else poly.lineTo(q.dx, q.dy);
+          }
+          poly.close();
+          // fill
+          canvas.drawPath(poly, Paint()..color = r.color);
+          // edge stroke (soft)
+          canvas.drawPath(poly, Paint()
+            ..color = Colors.black.withValues(alpha: isNight ? 0.14 : 0.18)
+            ..style = PaintingStyle.stroke
+            ..strokeWidth = 1.0);
+          // directional highlight: small facet oriented to light
+          final Rect b = poly.getBounds();
+          final Offset c = b.center;
+          final Offset dir = Offset(-lightDir.dx, -lightDir.dy);
+          final Offset hp = c + dir * (min(b.width, b.height) * 0.15);
+          final Path facet = Path()
+            ..moveTo(c.dx, c.dy)
+            ..lineTo(hp.dx + b.width * 0.15, hp.dy - b.height * 0.10)
+            ..lineTo(hp.dx - b.width * 0.10, hp.dy + b.height * 0.12)
+            ..close();
+          canvas.drawPath(facet, Paint()..color = Colors.white.withValues(alpha: isNight ? 0.06 : 0.10));
         }
         // Contact shadow under grass edge
         final Rect contact = Rect.fromLTWH(playRect.left, playRect.bottom - 1, playRect.width, min(18.0, soil.height));
@@ -1907,7 +1926,7 @@ class SnakeGame extends FlameGame {
       canvas.drawLine(Offset(_anthillMouth.dx - mouthW * 0.5, soil.top), Offset(_anthillMouth.dx + mouthW * 0.5, soil.top), rim);
       final Path mound = Path()
         ..moveTo(_anthillMouth.dx - mouthW * 0.95, soil.top)
-        ..quadraticBezierTo(_anthillMouth.dx, soil.top - 16, _anthillMouth.dx + mouthW * 0.95, soil.top)
+        ..quadraticBezierTo(_anthillMouth.dx, soil.top - 26, _anthillMouth.dx + mouthW * 0.95, soil.top)
         ..close();
       final Paint moundPaint = Paint()..color = (isNight ? const Color(0xFF3E2A25) : const Color(0xFF4E342E)).withValues(alpha: 0.9);
       canvas.drawPath(mound, moundPaint);
