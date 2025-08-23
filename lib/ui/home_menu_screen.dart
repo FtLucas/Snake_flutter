@@ -86,6 +86,18 @@ class _HomeMenuScreenState extends State<HomeMenuScreen> {
                       icon: Icons.play_arrow,
                       onTap: () => Navigator.of(context).pushNamed('/game'),
                     ),
+                    const SizedBox(height: 10),
+                    Row(
+                      mainAxisAlignment: MainAxisAlignment.center,
+                      children: [
+                        TextButton.icon(
+                          style: TextButton.styleFrom(foregroundColor: Colors.white70),
+                          onPressed: () => Navigator.of(context).pushNamed('/settings'),
+                          icon: const Icon(Icons.settings, size: 18),
+                          label: const Text('Paramètres'),
+                        ),
+                      ],
+                    ),
                   ],
                 ),
               ),

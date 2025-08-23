@@ -31,6 +31,11 @@ class _ShopScreenState extends State<ShopScreen> {
               profile.addCoins(500);
               setState(() {});
             }),
+            const SizedBox(height: 20),
+            const Text('Cosmétiques', style: TextStyle(fontSize: 16, fontWeight: FontWeight.bold)),
+            const SizedBox(height: 8),
+            _cosmetic('Skin Serpent Vert Néon'),
+            _cosmetic('Trail Étincelles'),
           ],
         ),
       ),
@@ -62,6 +67,17 @@ class _ShopScreenState extends State<ShopScreen> {
           onPressed: onBuy,
           child: const Text('Acheter'),
         ),
+      ),
+    );
+  }
+
+  Widget _cosmetic(String name) {
+    return Card(
+      child: ListTile(
+        leading: const Icon(Icons.brush),
+        title: Text(name),
+        subtitle: const Text('Bientôt disponible'),
+        trailing: OutlinedButton(onPressed: null, child: const Text('Locked')),
       ),
     );
   }

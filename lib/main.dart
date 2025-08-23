@@ -8,6 +8,7 @@ import 'snake_game.dart';
 import 'ui/home_menu_screen.dart';
 import 'ui/shop_screen.dart';
 import 'ui/skill_tree_screen.dart';
+import 'ui/settings_screen.dart';
 
 void main() {
   WidgetsFlutterBinding.ensureInitialized();
@@ -38,6 +39,7 @@ class MyApp extends StatelessWidget {
         '/game': (context) => const GameScreen(),
         '/shop': (context) => const ShopScreen(),
         '/skills': (context) => const SkillTreeScreen(),
+  '/settings': (context) => const SettingsScreen(),
       },
       debugShowCheckedModeBanner: false,
     );
