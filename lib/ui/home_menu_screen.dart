@@ -21,7 +21,28 @@ class _HomeMenuScreenState extends State<HomeMenuScreen> {
       backgroundColor: Colors.black,
       body: Stack(
         children: [
-          Positioned.fill(child: GameWidget(game: bg)),
+          Positioned.fill(
+            child: GestureDetector(
+              behavior: HitTestBehavior.translucent,
+              onTapDown: (d) {
+                final box = context.findRenderObject() as RenderBox?;
+                if (box == null) return;
+                final pos = box.globalToLocal(d.globalPosition);
+                bg.triggerTapEffect(Offset(pos.dx, pos.dy));
+              },
+              child: GameWidget(game: bg),
+            ),
+          ),
+          // Settings icon top-left
+          Positioned(
+            top: 12,
+            left: 12,
+            child: IconButton(
+              icon: const Icon(Icons.settings, color: Colors.white),
+              style: IconButton.styleFrom(backgroundColor: Colors.black.withValues(alpha: 0.25)),
+              onPressed: () => Navigator.of(context).pushNamed('/settings'),
+            ),
+          ),
           Positioned(
             top: 12,
             right: 12,
@@ -86,18 +107,7 @@ class _HomeMenuScreenState extends State<HomeMenuScreen> {
                       icon: Icons.play_arrow,
                       onTap: () => Navigator.of(context).pushNamed('/game'),
                     ),
-                    const SizedBox(height: 10),
-                    Row(
-                      mainAxisAlignment: MainAxisAlignment.center,
-                      children: [
-                        TextButton.icon(
-                          style: TextButton.styleFrom(foregroundColor: Colors.white70),
-                          onPressed: () => Navigator.of(context).pushNamed('/settings'),
-                          icon: const Icon(Icons.settings, size: 18),
-                          label: const Text('Paramètres'),
-                        ),
-                      ],
-                    ),
+                    const SizedBox(height: 6),
                   ],
                 ),
               ),

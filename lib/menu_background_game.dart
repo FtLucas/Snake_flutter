@@ -2,6 +2,7 @@ import 'dart:math';
 import 'dart:ui' as ui;
 import 'package:flame/game.dart';
 import 'package:flutter/material.dart';
+// import 'state/player_profile.dart';
 
 class GardenMenuGame extends FlameGame {
   final _rng = Random(1337);
@@ -31,6 +32,7 @@ class GardenMenuGame extends FlameGame {
   final List<_Tuft> _tufts = [];
   // cadence d'update pour lucioles (décimation)
   double _fireflyAcc = 0.0;
+  double _shakeT = 0.0; // légère secousse du feuillage après tap
   // Horloge globale
   double _time = 0.0;
   // Textures (pré-rendues) pour performances
@@ -322,6 +324,19 @@ class GardenMenuGame extends FlameGame {
     _trail.clear(); // on n'utilise plus la trail éparse pour le rendu
     // Construire les textures pré-rendues (herbe + canopée)
     _buildCachedTextures();
+  }
+
+  // Appelée depuis l'UI pour un tap sur le fond
+  void triggerTapEffect(Offset pos) {
+    _shakeT = 0.35;
+    int boosted = 0;
+    for (final f in _flies) {
+      if ((f.p - pos).distance < 100 && boosted < 12) {
+        f.v = Offset(f.v.dx, f.v.dy - (60 + _rng.nextDouble() * 120));
+        boosted++;
+      }
+      if (boosted >= 12) break;
+    }
   }
 
   // Construit les textures pré-rendues pour l'herbe et la canopée

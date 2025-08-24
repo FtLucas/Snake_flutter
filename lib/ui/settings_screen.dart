@@ -53,6 +53,42 @@ class _SettingsScreenState extends State<SettingsScreen> {
             value: s.leftHandedJoystick,
             onChanged: (v) => setState(() => s.setLeftHanded(v)),
           ),
+          _tile(
+            title: 'Taille joystick',
+            trailing: SizedBox(
+              width: 220,
+              child: Slider(
+                value: s.joystickSize,
+                min: 0.6,
+                max: 1.6,
+                onChanged: (v) => setState(() => s.setJoystickSize(v)),
+              ),
+            ),
+          ),
+          _tile(
+            title: 'Opacité joystick',
+            trailing: SizedBox(
+              width: 220,
+              child: Slider(
+                value: s.joystickOpacity,
+                min: 0.2,
+                max: 1.0,
+                onChanged: (v) => setState(() => s.setJoystickOpacity(v)),
+              ),
+            ),
+          ),
+          _tile(
+            title: 'Marge joystick',
+            trailing: SizedBox(
+              width: 220,
+              child: Slider(
+                value: s.joystickMargin,
+                min: 0,
+                max: 48,
+                onChanged: (v) => setState(() => s.setJoystickMargin(v)),
+              ),
+            ),
+          ),
           DropdownButtonFormField<GraphicsQuality>(
             decoration: const InputDecoration(labelText: 'Qualité graphique'),
             value: s.graphics,

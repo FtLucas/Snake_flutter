@@ -9,6 +9,8 @@ import 'ui/home_menu_screen.dart';
 import 'ui/shop_screen.dart';
 import 'ui/skill_tree_screen.dart';
 import 'ui/settings_screen.dart';
+import 'state/settings.dart';
+import 'state/player_profile.dart';
 
 void main() {
   WidgetsFlutterBinding.ensureInitialized();
@@ -27,6 +29,9 @@ class MyApp extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+  // Load persisted settings/profile early
+  AppSettings.instance.load();
+  PlayerProfile.instance.load();
     return MaterialApp(
       title: 'Snake Game',
       theme: ThemeData(
@@ -277,12 +282,21 @@ class _FloatingJoystickState extends State<_FloatingJoystick> {
   bool _active = false;
   Offset _center = Offset.zero;
   Offset _knob = Offset.zero;
-  final double _bgRadius = 56;
-  final double _knobRadius = 22;
+  double get _bgRadius => 56 * AppSettings.instance.joystickSize;
+  double get _knobRadius => 22 * AppSettings.instance.joystickSize;
 
   double get _maxR => _bgRadius - _knobRadius;
 
   void _start(Offset pos) {
+    final left = AppSettings.instance.leftHandedJoystick;
+    final margin = AppSettings.instance.joystickMargin;
+    final startArea = Rect.fromLTWH(
+      left ? 0 : (MediaQuery.of(context).size.width * 0.5),
+      0,
+      MediaQuery.of(context).size.width * 0.5,
+      MediaQuery.of(context).size.height,
+    ).deflate(margin);
+    if (!startArea.contains(pos)) return;
     setState(() {
       _active = true;
       _center = pos;
@@ -322,6 +336,7 @@ class _FloatingJoystickState extends State<_FloatingJoystick> {
 
   @override
   Widget build(BuildContext context) {
+  final opacity = AppSettings.instance.joystickOpacity;
     return GestureDetector(
       behavior: HitTestBehavior.translucent,
       onPanStart: (d) {
@@ -341,6 +356,7 @@ class _FloatingJoystickState extends State<_FloatingJoystick> {
           knob: _knob,
           bgRadius: _bgRadius,
           knobRadius: _knobRadius,
+          opacity: opacity,
         ),
         size: Size.infinite,
       ),
@@ -354,23 +370,25 @@ class _FloatingJoystickPainter extends CustomPainter {
   final Offset knob;
   final double bgRadius;
   final double knobRadius;
+  final double opacity;
   _FloatingJoystickPainter({
     required this.active,
     required this.center,
     required this.knob,
     required this.bgRadius,
     required this.knobRadius,
+    this.opacity = 1.0,
   });
 
   @override
   void paint(Canvas canvas, Size size) {
     if (!active) return;
-    final bg = Paint()..color = const Color(0x66000000);
+    final bg = Paint()..color = const Color(0x66000000).withValues(alpha: opacity);
     final ring = Paint()
-      ..color = Colors.white.withValues(alpha: 0.3)
+      ..color = Colors.white.withValues(alpha: 0.3 * opacity)
       ..style = PaintingStyle.stroke
       ..strokeWidth = 2;
-    final knobPaint = Paint()..color = const Color(0xFFEEEEEE).withValues(alpha: 0.9);
+    final knobPaint = Paint()..color = const Color(0xFFEEEEEE).withValues(alpha: 0.9 * opacity);
 
     canvas.drawCircle(center, bgRadius, bg);
     canvas.drawCircle(center, bgRadius, ring);
