@@ -2,6 +2,7 @@ import 'dart:math';
 import 'dart:ui' as ui;
 import 'package:flame/game.dart';
 import 'package:flutter/material.dart';
+import 'state/player_profile.dart';
 // import 'state/player_profile.dart';
 
 class GardenMenuGame extends FlameGame {
@@ -639,10 +640,13 @@ class GardenMenuGame extends FlameGame {
   //   _ants.removeWhere((ant) => !ant.emerging && !ant.fromBurst && !_isAntInVision(ant.p));
   // }
 
+  // Décroissance de la secousse
+  if (_shakeT > 0) _shakeT = max(0.0, _shakeT - dt);
+
   _t = (_t + dt / cycleSeconds) % 1.0;
     _time += dt;
     // ants wander/chase or orbit (scripted)
-    for (final a in _ants) {
+  for (final a in _ants) {
       // Emergence: sortir brièvement de la fourmilière puis passer en orbite
       if (a.emerging) {
         a.emergeT += dt;
@@ -1314,7 +1318,8 @@ class GardenMenuGame extends FlameGame {
   canvas.drawPicture(_staticDecorPic!);
 
   // feuillage (multi-nappes) — couvre bien le haut du tronc (utilise les valeurs calculées)
-  final canopyCenter = _canopyCenter;
+  final double shake = _shakeT > 0 ? (sin(_time * 18.0) * _shakeT * 3.0) : 0.0;
+  final canopyCenter = _canopyCenter.translate(shake * 0.4, shake);
   final canopyR = _canopyR;
   // Pendant la phase 0 de descente, dessiner le serpent sous la canopée pour éviter l'effet "dans les airs"
   final bool snakeUnderCanopyNow = _snakeAlive && _scene == 2 && _snakeDescendT > 0 && _snakeDescendPhase == 0;
@@ -1459,14 +1464,16 @@ class GardenMenuGame extends FlameGame {
       canvas.drawCircle(c.translate(0, -6), 2.6, Paint()..color = const Color(0xFFFFF59D));
   }
 
-  // lucioles (au-dessus du décor). Visible surtout la nuit — halo doux réintroduit (sans gradient)
+  // lucioles (au-dessus du décor). Visible surtout la nuit — halo doux (cosmétique halo boost optionnel)
     if (nightAmt > 0) {
+      final bool haloBoost = PlayerProfile.instance.haloFireflies;
       for (final f in _flies) {
         final glow = 0.5 + 0.5 * sin(_time * 3.0 + f.phase);
         final double coreA = (0.25 * nightAmt + 0.45 * glow * nightAmt).clamp(0.0, 0.85);
-        final double haloA = (0.08 * nightAmt + 0.20 * glow * nightAmt).clamp(0.0, 0.35);
+        final double haloA = ((0.08 + (haloBoost ? 0.06 : 0.0)) * nightAmt + (0.20 + (haloBoost ? 0.10 : 0.0)) * glow * nightAmt).clamp(0.0, 0.5);
         // halo large et très doux
-        canvas.drawCircle(f.p, 10, Paint()..color = const Color(0xFFFFF59D).withValues(alpha: haloA));
+        final double r = haloBoost ? 13 : 10;
+        canvas.drawCircle(f.p, r, Paint()..color = const Color(0xFFFFF59D).withValues(alpha: haloA));
         // coeur
         canvas.drawCircle(f.p, 2.6, Paint()..color = const Color(0xFFFFF59D).withValues(alpha: coreA));
       }
@@ -1929,6 +1936,27 @@ extension _MenuRender on GardenMenuGame {
       clipped = true;
     }
     final int count = _segments.length;
+    // Resolve cosmetic skin color
+    final String skin = PlayerProfile.instance.equippedSnakeSkin ?? 'default';
+    Color segColor(int idx, int total) {
+      final double t = total <= 1 ? 0.0 : idx / (total - 1);
+      switch (skin) {
+        case 'skin_neon':
+          return Color.lerp(const Color(0xFF00FF88), const Color(0xFF00E676), 1.0 - t)!.withValues(alpha: 0.95);
+        case 'skin_red':
+          return Color.lerp(const Color(0xFFE53935), const Color(0xFFFF7043), 1.0 - t)!.withValues(alpha: 0.95);
+        case 'skin_blue':
+          return Color.lerp(const Color(0xFF1E88E5), const Color(0xFF26C6DA), 1.0 - t)!.withValues(alpha: 0.95);
+        case 'skin_gold':
+          return Color.lerp(const Color(0xFFFFD54F), const Color(0xFFFFB300), 1.0 - t)!.withValues(alpha: 0.98);
+        case 'skin_stripes':
+          final Color a = const Color(0xFF66BB6A);
+          final Color b = const Color(0xFF2E7D32);
+          return (idx % 2 == 0 ? a : b).withValues(alpha: 0.96);
+        default:
+          return Color.lerp(const Color(0xFF2E7D32), const Color(0xFF66BB6A), 1.0 - t)!.withValues(alpha: 0.95);
+      }
+    }
     for (int i = count - 1; i >= 0; i--) {
       final double t = count <= 1 ? 0.0 : i / (count - 1);
       final double r = 4.5 + 5.0 * (1.0 - t);
@@ -1937,7 +1965,7 @@ extension _MenuRender on GardenMenuGame {
       final Offset nvS = Offset(ldirS.dx / dlS, ldirS.dy / dlS);
       final Rect segShadow = Rect.fromCenter(center: _segments[i] + nvS * 3.0, width: r * 2.0, height: r * 0.9);
       canvas.drawOval(segShadow, Paint()..color = Colors.black.withValues(alpha: 0.24 * 0.9));
-      final Color col = Color.lerp(const Color(0xFF2E7D32), const Color(0xFF66BB6A), 1.0 - t)!.withValues(alpha: 0.95);
+      final Color col = segColor(i, count);
       final Offset p = _segments[i];
       canvas.drawCircle(p, r, Paint()..color = col);
       // highlight simple (sans gradient) côté lumière

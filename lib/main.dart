@@ -255,7 +255,14 @@ class _GameScreenState extends State<GameScreen> {
                         },
                         style: ElevatedButton.styleFrom(backgroundColor: Colors.green, minimumSize: const Size(160, 50)),
                         child: const Text('Reset'),
-                      )
+                      ),
+                      const SizedBox(height: 10),
+                      OutlinedButton(
+                        onPressed: () {
+                          Navigator.of(context).pushNamedAndRemoveUntil('/', (route) => false);
+                        },
+                        child: const Text('Menu'),
+                      ),
                     ],
                   ),
                 ),

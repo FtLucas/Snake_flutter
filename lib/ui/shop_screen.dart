@@ -72,12 +72,43 @@ class _ShopScreenState extends State<ShopScreen> {
   }
 
   Widget _cosmetic(String name) {
+    final id = name.contains('Néon') ? 'skin_neon' : (name.contains('Étincelles') ? 'trail_sparks' : name);
+    final owned = profile.isOwned(id);
+    final equipped = (id == profile.equippedSnakeSkin) || (id == profile.equippedTrail);
     return Card(
       child: ListTile(
         leading: const Icon(Icons.brush),
         title: Text(name),
-        subtitle: const Text('Bientôt disponible'),
-        trailing: OutlinedButton(onPressed: null, child: const Text('Locked')),
+        subtitle: Text(owned ? (equipped ? 'Équipé' : 'Possédé') : 'Non possédé'),
+        trailing: Row(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            if (!owned)
+              ElevatedButton(
+                onPressed: () {
+                  // prix fixe démo 200
+                  if (!profile.spend(200)) {
+                    ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Pas assez de pièces.')));
+                    return;
+                  }
+                  profile.grant(id);
+                  setState(() {});
+                },
+                child: const Text('Acheter 200'),
+              ),
+            if (owned)
+              OutlinedButton(
+                onPressed: equipped
+                    ? null
+                    : () {
+                        if (id.startsWith('skin_')) profile.equipSkin(id);
+                        if (id.startsWith('trail_')) profile.equipTrailFx(id);
+                        setState(() {});
+                      },
+                child: Text(equipped ? 'Équipé' : 'Équiper'),
+              ),
+          ],
+        ),
       ),
     );
   }
