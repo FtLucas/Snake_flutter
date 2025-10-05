@@ -17,4 +17,6 @@ if not defined FLUTTER_CMD (
 call "%FLUTTER_CMD%" --no-version-check clean
 if errorlevel 1 exit /b %errorlevel%
 call "%FLUTTER_CMD%" --no-version-check pub get
+if errorlevel 1 exit /b %errorlevel%
+call "%FLUTTER_CMD%" --no-version-check run
 exit /b %errorlevel%

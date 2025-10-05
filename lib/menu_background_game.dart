@@ -3,7 +3,25 @@ import 'dart:ui' as ui;
 import 'package:flame/game.dart';
 import 'package:flutter/material.dart';
 import 'state/player_profile.dart';
+import 'state/settings.dart';
 // import 'state/player_profile.dart';
+
+// Helper pour adaptation daltonisme (identique à snake_game.dart)
+Color getColorForColorblind(Color original) {
+  if (!AppSettings.instance.colorBlindMode) return original;
+  final r = original.red;
+  final g = original.green;
+  final b = original.blue;
+  // Rouge (R haut, G/B bas) -> Bleu
+  if (r > 150 && g < 120 && b < 120) {
+    return const Color(0xFF2196F3); // Bleu
+  }
+  // Vert (G haut, R/B bas) -> Orange/Jaune
+  if (g > 100 && r < 150 && b < 150) {
+    return const Color(0xFFFFB300); // Orange/Jaune
+  }
+  return original;
+}
 
 class GardenMenuGame extends FlameGame {
   final _rng = Random(1337);
@@ -132,9 +150,9 @@ class GardenMenuGame extends FlameGame {
   final y = _groundTop + 8 + _rng.nextDouble() * (maxGrassY - (_groundTop + 8));
       return Offset(x, y);
     });
-    const palette = [
+    final palette = [
       Color(0xFFF06292), Color(0xFFFF8A65), Color(0xFFFFD54F),
-      Color(0xFF81C784), Color(0xFF4FC3F7), Color(0xFFBA68C8),
+      getColorForColorblind(Color(0xFF81C784)), Color(0xFF4FC3F7), Color(0xFFBA68C8),
     ];
   _flowerColors = List.generate(_flowers.length, (i) => palette[i % palette.length].withValues(alpha: 0.9));
 
@@ -370,7 +388,7 @@ class GardenMenuGame extends FlameGame {
     final double gStep = max(12.0, min(26.0, texSize.width / 40));
     final randGrass = Random(2025);
     final Paint bladeDark = Paint()
-      ..color = const Color(0xFF0F3D16).withValues(alpha: 0.10)
+      ..color = getColorForColorblind(const Color(0xFF0F3D16)).withValues(alpha: 0.10)
       ..strokeWidth = 1.0
       ..style = PaintingStyle.stroke
       ..strokeCap = StrokeCap.round;
@@ -413,10 +431,10 @@ class GardenMenuGame extends FlameGame {
     }
     final Offset canopyCenter = _canopyCenter;
     final double canopyR = _canopyR;
-    blob(canopyCenter, canopyR * 1.00, const [Color(0xFF66BB6A), Color(0xFF2E7D32)]);
-    blob(canopyCenter.translate(-canopyR * 0.35, -canopyR * 0.12), canopyR * 0.78, const [Color(0xFF81C784), Color(0xFF388E3C)]);
-    blob(canopyCenter.translate(canopyR * 0.36, -canopyR * 0.08), canopyR * 0.74, const [Color(0xFF81C784), Color(0xFF2E7D32)]);
-    blob(canopyCenter.translate(0, canopyR * 0.05), canopyR * 0.56, const [Color(0xFFA5D6A7), Color(0xFF43A047)]);
+    blob(canopyCenter, canopyR * 1.00, [getColorForColorblind(const Color(0xFF66BB6A)), getColorForColorblind(const Color(0xFF2E7D32))]);
+    blob(canopyCenter.translate(-canopyR * 0.35, -canopyR * 0.12), canopyR * 0.78, [getColorForColorblind(const Color(0xFF81C784)), getColorForColorblind(const Color(0xFF388E3C))]);
+    blob(canopyCenter.translate(canopyR * 0.36, -canopyR * 0.08), canopyR * 0.74, [getColorForColorblind(const Color(0xFF81C784)), getColorForColorblind(const Color(0xFF2E7D32))]);
+    blob(canopyCenter.translate(0, canopyR * 0.05), canopyR * 0.56, [getColorForColorblind(const Color(0xFFA5D6A7)), getColorForColorblind(const Color(0xFF43A047))]);
     return recorder.endRecording();
   }
 
@@ -461,8 +479,8 @@ class GardenMenuGame extends FlameGame {
           base.dy + right.dy * baseW,
         )
         ..close();
-      const Color c0 = Color(0xFF1E6020);
-      const Color c1 = Color(0xFF4CAF50);
+      final Color c0 = getColorForColorblind(const Color(0xFF1E6020));
+      final Color c1 = getColorForColorblind(const Color(0xFF4CAF50));
       final Paint leafPaint = Paint()
         ..shader = ui.Gradient.linear(
           base.translate(0, 0),
@@ -1265,7 +1283,7 @@ class GardenMenuGame extends FlameGame {
     final Paint grassPaint = Paint()
       ..shader = ui.Gradient.linear(
         grass.topLeft, grass.bottomLeft,
-        [const Color(0xFF2E7D32), const Color(0xFF1B5E20)],
+        [getColorForColorblind(const Color(0xFF2E7D32)), getColorForColorblind(const Color(0xFF1B5E20))],
         const [0.0, 1.0],
       );
     canvas.drawRect(grass, grassPaint);
@@ -1340,10 +1358,10 @@ class GardenMenuGame extends FlameGame {
         ..shader = ui.Gradient.radial(c.translate(-r * 0.2, -r * 0.15), r, colors, const [0.0, 1.0]);
       canvas.drawCircle(c, r, p);
     }
-    blob(canopyCenter, canopyR * 1.00, const [Color(0xFF66BB6A), Color(0xFF2E7D32)]);
-    blob(canopyCenter.translate(-canopyR * 0.35, -canopyR * 0.12), canopyR * 0.78, const [Color(0xFF81C784), Color(0xFF388E3C)]);
-    blob(canopyCenter.translate(canopyR * 0.36, -canopyR * 0.08), canopyR * 0.74, const [Color(0xFF81C784), Color(0xFF2E7D32)]);
-    blob(canopyCenter.translate(0, canopyR * 0.05), canopyR * 0.56, const [Color(0xFFA5D6A7), Color(0xFF43A047)]);
+    blob(canopyCenter, canopyR * 1.00, [getColorForColorblind(const Color(0xFF66BB6A)), getColorForColorblind(const Color(0xFF2E7D32))]);
+    blob(canopyCenter.translate(-canopyR * 0.35, -canopyR * 0.12), canopyR * 0.78, [getColorForColorblind(const Color(0xFF81C784)), getColorForColorblind(const Color(0xFF388E3C))]);
+    blob(canopyCenter.translate(canopyR * 0.36, -canopyR * 0.08), canopyR * 0.74, [getColorForColorblind(const Color(0xFF81C784)), getColorForColorblind(const Color(0xFF2E7D32))]);
+    blob(canopyCenter.translate(0, canopyR * 0.05), canopyR * 0.56, [getColorForColorblind(const Color(0xFFA5D6A7)), getColorForColorblind(const Color(0xFF43A047))]);
   }
   // Texture de feuilles retirée (plus de motif par-dessus la canopée)
   // (surbrillance/ombre statiques du feuillage supprimées pour retirer l'ombre des feuilles)
@@ -1351,7 +1369,7 @@ class GardenMenuGame extends FlameGame {
   // fourmilière déjà incluse dans le décor statique
 
     // pommes (dans l'arbre) avec ombrage/speculaire
-    final appleBody = Paint()..color = const Color(0xFFE53935);
+    final appleBody = Paint()..color = getColorForColorblind(const Color(0xFFE53935));
     for (final p in _apples) {
       canvas.drawCircle(p, 7, Paint()..color = Colors.black.withValues(alpha: 0.08));
       canvas.drawCircle(p.translate(-1.5, -1.5), 7, appleBody);
@@ -1449,7 +1467,7 @@ class GardenMenuGame extends FlameGame {
   final Offset nvF = Offset(ldirF.dx / dlF, ldirF.dy / dlF);
   final Rect flowerShadow = Rect.fromCenter(center: c.translate(0, 4) + nvF * 2.4, width: 10, height: 3.0);
   canvas.drawOval(flowerShadow, Paint()..color = Colors.black.withValues(alpha: 0.20 * dayAmt));
-      canvas.drawLine(c.translate(0, 8), c.translate(0, -6), Paint()..color = const Color(0xFF33691E)..strokeWidth = 2);
+      canvas.drawLine(c.translate(0, 8), c.translate(0, -6), Paint()..color = getColorForColorblind(const Color(0xFF33691E))..strokeWidth = 2);
       final petal = Paint()..color = col;
       for (int k = 0; k < 5; k++) {
         final a = k * 2 * pi / 5;

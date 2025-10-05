@@ -7,6 +7,23 @@ import 'package:flame/components.dart';
 import 'package:flame/game.dart';
 import 'package:flutter/material.dart';
 import 'state/player_profile.dart';
+import 'state/settings.dart';
+
+// Fonction d'aide pour adapter les couleurs au mode daltonien
+Color getColorForColorblind(Color original) {
+  if (!AppSettings.instance.colorBlindMode) return original;
+
+  // Convertir rouge/vert en bleu/jaune pour deutéranopie/protanopie
+  // Rouge (0xFF...35-FF, G<100, B<100) -> Bleu
+  if (original.red > 200 && original.green < 100 && original.blue < 100) {
+    return const Color(0xFF2196F3); // Bleu
+  }
+  // Vert (R<150, 0xFF...6A-FF, B<150) -> Jaune/Orange
+  if (original.red < 150 && original.green > 150 && original.blue < 150) {
+    return const Color(0xFFFFB300); // Orange/Jaune
+  }
+  return original;
+}
 
 enum PowerUpType { speed, shield, multiFood }
 
@@ -359,13 +376,15 @@ class EnemyComponent extends PositionComponent {
     // Ant "3D-like" with shadow and spherical shading
     final r = enemy.size;
 
-    // Shadow (unrotated, under the ant)
-    final Rect shadowOval = Rect.fromCenter(
-      center: const Offset(0, 0) + Offset(0, r * 0.45),
-      width: r * 1.8,
-      height: r * 0.6,
-    );
-  canvas.drawOval(shadowOval, Paint()..color = Colors.black.withValues(alpha: 0.22 * gameRef.lightIntensity));
+    // Shadow (unrotated, under the ant) - désactivé en basse qualité
+    if (AppSettings.instance.graphics != GraphicsQuality.low) {
+      final Rect shadowOval = Rect.fromCenter(
+        center: const Offset(0, 0) + Offset(0, r * 0.45),
+        width: r * 1.8,
+        height: r * 0.6,
+      );
+      canvas.drawOval(shadowOval, Paint()..color = Colors.black.withValues(alpha: 0.22 * gameRef.lightIntensity));
+    }
 
     // Rotate canvas toward current direction (origin is component center)
     final dir = enemy.direction.length2 > 0 ? enemy.direction.normalized() : Vector2(1, 0);
@@ -392,6 +411,15 @@ class EnemyComponent extends PositionComponent {
         ..style = PaintingStyle.stroke
         ..strokeWidth = 2.0;
       canvas.drawCircle(const Offset(0, 0), auraR, aura);
+    }
+
+    // Haute qualité: contour subtil pour améliorer la visibilité
+    if (AppSettings.instance.graphics == GraphicsQuality.high) {
+      final outline = Paint()
+        ..color = Colors.white.withValues(alpha: 0.12 * gameRef.lightIntensity)
+        ..style = PaintingStyle.stroke
+        ..strokeWidth = 1.0;
+      canvas.drawCircle(const Offset(0, 0), r, outline);
     }
   final abdomen = Offset(-r * 0.9, 0);
   const thorax = Offset(0, 0);
@@ -465,11 +493,11 @@ class EnemyComponent extends PositionComponent {
       // bar color by health
       Color fc;
       if (pct > 0.5) {
-        fc = const Color(0xFF66BB6A);
+        fc = getColorForColorblind(const Color(0xFF66BB6A)); // Vert -> Orange en mode daltonien
       } else if (pct > 0.25) {
-        fc = const Color(0xFFFFEE58);
+        fc = const Color(0xFFFFEE58); // Jaune reste jaune
       } else {
-        fc = const Color(0xFFE53935);
+        fc = getColorForColorblind(const Color(0xFFE53935)); // Rouge -> Bleu en mode daltonien
       }
       final double fw = bw * pct;
       final Rect fg = Rect.fromLTWH(bg.left, bg.top, fw, bh);
@@ -563,6 +591,7 @@ class SnakeGame extends FlameGame {
   // states
   bool gameOver = false;
   bool gameStarted = false;
+  bool _isResetting = false; // flag to prevent operations during reset
   bool showPowerUpSelection = false;
 
   // timers
@@ -743,11 +772,16 @@ class SnakeGame extends FlameGame {
 
   void _generateSoilDecor() {
     final rng = Random(_decorSeed);
+    final quality = AppSettings.instance.graphics;
     _rocks.clear();
     _soilGrainsLight.clear();
     _soilGrainsDark.clear();
     final Rect soil = Rect.fromLTWH(0, playOrigin.y + playSize.y, size.x, size.y - (playOrigin.y + playSize.y));
-    final int count = (size.x / 12).clamp(12, 80).toInt();
+
+    // Adapter le nombre de pierres selon la qualité
+    final double rockDensity = quality == GraphicsQuality.low ? 0.5 : quality == GraphicsQuality.high ? 1.5 : 1.0;
+    final int count = ((size.x / 12) * rockDensity).clamp(6, 120).toInt();
+
     for (int i = 0; i < count; i++) {
       final double x = rng.nextDouble() * soil.width;
       final double y = rng.nextDouble() * soil.height;
@@ -769,12 +803,14 @@ class SnakeGame extends FlameGame {
     }
 
     // Grain specks: precompute light/dark tiny dots, avoid the top 4px under the grass edge
+    // Basse qualité: pas de grains pour meilleures performances
   const double marginTop = 4.0;
     final Rect soilGrainArea = Rect.fromLTWH(soil.left, soil.top + marginTop, soil.width, max(0.0, soil.height - marginTop));
-    if (soilGrainArea.height > 0 && soilGrainArea.width > 0) {
+    if (soilGrainArea.height > 0 && soilGrainArea.width > 0 && quality != GraphicsQuality.low) {
       // Counts proportional to area, clamped to a reasonable range
-      final int lightCount = (soilGrainArea.width * soilGrainArea.height / 1600).clamp(80, 420).toInt();
-      final int darkCount = (soilGrainArea.width * soilGrainArea.height / 2000).clamp(60, 360).toInt();
+      final double grainDensity = quality == GraphicsQuality.high ? 1.5 : 1.0;
+      final int lightCount = ((soilGrainArea.width * soilGrainArea.height / 1600) * grainDensity).clamp(40, 600).toInt();
+      final int darkCount = ((soilGrainArea.width * soilGrainArea.height / 2000) * grainDensity).clamp(30, 500).toInt();
       for (int i = 0; i < lightCount; i++) {
         final double x = rng.nextDouble() * soilGrainArea.width;
         final double y = rng.nextDouble() * soilGrainArea.height;
@@ -820,31 +856,38 @@ class SnakeGame extends FlameGame {
 
   Future<void> _generateGrassTile() async {
     // Create a simple procedural grass tile once
+    // Adapter la qualité en fonction des paramètres
+    final quality = AppSettings.instance.graphics;
     final double s = _grassTileSize.toDouble();
     final recorder = ui.PictureRecorder();
     final canvas = Canvas(recorder, Rect.fromLTWH(0, 0, s, s));
 
     // Base green
-    final base = Paint()..color = const Color(0xFF1B5E20); // dark green
+    final base = Paint()..color = getColorForColorblind(const Color(0xFF1B5E20)); // dark green -> adapté daltonisme
     canvas.drawRect(Rect.fromLTWH(0, 0, s, s), base);
 
     final rng = Random(42);
+
+    // Ajuster la densité selon la qualité
+    final int patchCount = quality == GraphicsQuality.low ? 40 : quality == GraphicsQuality.high ? 180 : 120;
+    final int bladeCount = quality == GraphicsQuality.low ? 30 : quality == GraphicsQuality.high ? 100 : 70;
+
     // Add lighter patches
-    for (int i = 0; i < 120; i++) {
+    for (int i = 0; i < patchCount; i++) {
       final cx = rng.nextDouble() * s;
       final cy = rng.nextDouble() * s;
       final r = 0.5 + rng.nextDouble() * 1.5;
       final paint = Paint()
-        ..color = Color.lerp(const Color(0xFF43A047), const Color(0xFF2E7D32), rng.nextDouble())!;
+        ..color = getColorForColorblind(Color.lerp(const Color(0xFF43A047), const Color(0xFF2E7D32), rng.nextDouble())!);
       canvas.drawCircle(Offset(cx, cy), r, paint);
     }
 
     // Draw some thin blades
     final bladePaint = Paint()
-      ..color = const Color(0xFF66BB6A).withValues(alpha: 0.8)
+      ..color = getColorForColorblind(const Color(0xFF66BB6A)).withValues(alpha: 0.8)
       ..strokeWidth = 1.0
       ..strokeCap = StrokeCap.round;
-    for (int i = 0; i < 70; i++) {
+    for (int i = 0; i < bladeCount; i++) {
       final x = rng.nextDouble() * s;
       final y = rng.nextDouble() * s;
       final len = 2.0 + rng.nextDouble() * 4.0;
@@ -1048,6 +1091,8 @@ class SnakeGame extends FlameGame {
 
   /// Fait apparaître un ennemi sur un bord aléatoire
   void _spawnEnemy() {
+    // Don't spawn during reset to avoid race conditions
+    if (_isResetting) return;
   // Spawn at the extremities (edges) of the texture playfield
   // Spawn from edges only (anthill disabled for now)
   int side = random.nextInt(4);
@@ -1110,7 +1155,7 @@ class SnakeGame extends FlameGame {
         direction: dir,
         speed: 110 * spdFactor,
         size: 12,
-        color: const Color(0xFF00E676), // vivid green for poison
+        color: getColorForColorblind(const Color(0xFF00E676)), // vivid green for poison -> adapté daltonisme
         health: 1,
         maxHealth: 1,
         kind: EnemyClass.antPoison,
@@ -1266,6 +1311,8 @@ class SnakeGame extends FlameGame {
   @override
   void update(double dt) {
     super.update(dt);
+  // Ne rien faire pendant le reset pour éviter les conflits
+  if (_isResetting) return;
   if (!gameStarted || gameOver || showPowerUpSelection) return;
 
   // Accélération légère des timers en mode démo (n'affecte pas la physique de collision)
@@ -1696,18 +1743,56 @@ class SnakeGame extends FlameGame {
 
   /// Réinitialise la partie
   void resetGame() {
+    // Empêcher toute opération pendant le reset
+    _isResetting = true;
+
+    // Arrêter tous les timers et le jeu
     _cancelTimers();
+    gameStarted = false;
+    gameOver = false;
+
+    // Supprimer tous les composants actifs de manière sécurisée
+    final enemiesToRemove = children.whereType<EnemyComponent>().toList();
+    final projectilesToRemove = children.whereType<ProjectileComponent>().toList();
+
+    for (final enemy in enemiesToRemove) {
+      enemy.removeFromParent();
+    }
+    for (final projectile in projectilesToRemove) {
+      projectile.removeFromParent();
+    }
+
+    // Reset des variables d'état
     baseMoveInterval = 0.25;
     enemySpawnRate = 3.0;
+    showPowerUpSelection = false;
+
+    // Réinitialiser complètement le jeu
     _initializeGame();
-    _startGameLoop();
-  _startEnemySpawning();
-  gameStarted = true;
+
+    // Redémarrer après un court délai pour éviter les problèmes de synchronisation
+    Future.delayed(const Duration(milliseconds: 100), () {
+      if (!gameOver) {  // Vérifier qu'on n'a pas quitté entre-temps
+        _isResetting = false; // Réactiver les opérations normales
+        _startGameLoop();
+        _startEnemySpawning();
+        gameStarted = true;
+      } else {
+        _isResetting = false;
+      }
+    });
   }
 
   /// Dessine le jeu (grille, serpent, nourriture, ennemis, UI overlay)
   @override
   void render(Canvas canvas) {
+    // Appliquer l'anti-aliasing selon la qualité
+    final quality = AppSettings.instance.graphics;
+    if (quality == GraphicsQuality.high) {
+      // Anti-aliasing renforcé en haute qualité
+      canvas.save();
+    }
+
     // Dark outside area
     canvas.drawRect(Rect.fromLTWH(0, 0, size.x, size.y), Paint()..color = const Color(0xFF000000));
 
@@ -2057,7 +2142,7 @@ class SnakeGame extends FlameGame {
       }
       canvas.restore();
     } else {
-      canvas.drawRect(playRect, Paint()..color = const Color(0xFF1B5E20));
+      canvas.drawRect(playRect, Paint()..color = getColorForColorblind(const Color(0xFF1B5E20))); // Fond vert -> adapté daltonisme
     }
 
     // grid lines (more discreet) inside the playfield only
@@ -2179,6 +2264,12 @@ class SnakeGame extends FlameGame {
           ..strokeWidth = 2.0;
         canvas.drawArc(Rect.fromCircle(center: center, radius: r), ang - 0.45, 0.9, false, rim);
       }
+      // Haute qualité: reflet spéculaire brillant
+      if (quality == GraphicsQuality.high && lightIntensity > 0.15) {
+        final Offset highlightPos = center + lightOffset * 0.5;
+        canvas.drawCircle(highlightPos, r * 0.25, Paint()..color = Colors.white.withValues(alpha: 0.4 * lightIntensity));
+        canvas.drawCircle(highlightPos, r * 0.15, Paint()..color = Colors.white.withValues(alpha: 0.6 * lightIntensity));
+      }
     }
     // simple eyes on the head for character
     if (_segmentCenters.isNotEmpty) {
@@ -2203,14 +2294,21 @@ class SnakeGame extends FlameGame {
         playOrigin.y + food!.y * gridSize + gridSize / 2,
       );
       final r = gridSize / 2 - 2;
-      // Apple skin: red body with a slight highlight, stem and leaf
-      final red = hasMultiFood ? const Color(0xFFFF7043) : const Color(0xFFE53935);
+      // Apple skin: red body with a slight highlight, stem and leaf - adapté au daltonisme
+      final red = getColorForColorblind(hasMultiFood ? const Color(0xFFFF7043) : const Color(0xFFE53935));
       final body = Paint()..color = red;
   final bodyShadow = Paint()..color = Colors.black.withValues(alpha: 0.08 * lightIntensity);
       canvas.drawCircle(center.translate(1.5, 2), r, bodyShadow);
+
+      // Haute qualité: halo lumineux autour de la nourriture
+      if (quality == GraphicsQuality.high && hasMultiFood) {
+        canvas.drawCircle(center, r * 1.4, Paint()..color = red.withValues(alpha: 0.15));
+        canvas.drawCircle(center, r * 1.2, Paint()..color = red.withValues(alpha: 0.25));
+      }
+
       canvas.drawCircle(center, r, body);
       // highlight
-  final highlight = Paint()..color = Colors.white.withValues(alpha: 0.25);
+  final highlight = Paint()..color = Colors.white.withValues(alpha: quality == GraphicsQuality.high ? 0.35 : 0.25);
       canvas.drawCircle(center.translate(-r * 0.35, -r * 0.35), r * 0.35, highlight);
       // stem
       final stem = Paint()
@@ -2219,7 +2317,7 @@ class SnakeGame extends FlameGame {
         ..strokeCap = StrokeCap.round;
       canvas.drawLine(center.translate(0, -r * 0.9), center.translate(0, -r * 0.4), stem);
       // leaf
-      final leafPaint = Paint()..color = const Color(0xFF66BB6A);
+      final leafPaint = Paint()..color = getColorForColorblind(const Color(0xFF66BB6A)); // Feuille verte -> Orange en daltonien
       final leafPath = Path()
         ..moveTo(center.dx + 0, center.dy - r * 0.65)
         ..quadraticBezierTo(center.dx + r * 0.7, center.dy - r * 1.0, center.dx + r * 0.9, center.dy - r * 0.3)

@@ -4,7 +4,10 @@
 		{
 			"label": "Flutter Clean & Run",
 			"type": "shell",
-			"command": "${workspaceFolder}/Snake_flutter/run_flutter.bat",
+			"command": "flutter clean && flutter pub get",
+			"windows": {
+				"command": "flutter clean; flutter pub get"
+			},
 			"isBackground": false,
 			"problemMatcher": [],
 			"group": "build"

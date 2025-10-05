@@ -2,6 +2,7 @@ import 'package:flame/game.dart';
 import 'package:flutter/material.dart';
 import '../menu_background_game.dart';
 import '../state/player_profile.dart';
+import '../state/translations.dart';
 
 class HomeMenuScreen extends StatefulWidget {
   const HomeMenuScreen({super.key});
@@ -11,7 +12,19 @@ class HomeMenuScreen extends StatefulWidget {
 }
 
 class _HomeMenuScreenState extends State<HomeMenuScreen> {
-  final GardenMenuGame bg = GardenMenuGame();
+  late GardenMenuGame bg;
+
+  @override
+  void initState() {
+    super.initState();
+    bg = GardenMenuGame();
+  }
+
+  void _resetAnimation() {
+    setState(() {
+      bg = GardenMenuGame();
+    });
+  }
 
   @override
   Widget build(BuildContext context) {
@@ -40,7 +53,10 @@ class _HomeMenuScreenState extends State<HomeMenuScreen> {
             child: IconButton(
               icon: const Icon(Icons.settings, color: Colors.white),
               style: IconButton.styleFrom(backgroundColor: Colors.black.withValues(alpha: 0.25)),
-              onPressed: () => Navigator.of(context).pushNamed('/settings'),
+              onPressed: () async {
+                await Navigator.of(context).pushNamed('/settings');
+                _resetAnimation();
+              },
             ),
           ),
           Positioned(
@@ -85,25 +101,25 @@ class _HomeMenuScreenState extends State<HomeMenuScreen> {
                   mainAxisSize: MainAxisSize.min,
                   children: [
                     _MenuButton(
-                      label: 'Boutique',
+                      label: tr('shop'),
                       icon: Icons.store,
                       onTap: () async {
                         await Navigator.of(context).pushNamed('/shop');
-                        setState(() {}); // refresh coins
+                        _resetAnimation(); // refresh coins and animation
                       },
                     ),
                     const SizedBox(height: 10),
                     _MenuButton(
-                      label: 'Arbre de compétences',
+                      label: tr('skills'),
                       icon: Icons.auto_awesome,
                       onTap: () async {
                         await Navigator.of(context).pushNamed('/skills');
-                        setState(() {});
+                        _resetAnimation();
                       },
                     ),
                     const SizedBox(height: 14),
                     _MenuButton(
-                      label: 'Jouer',
+                      label: tr('play'),
                       icon: Icons.play_arrow,
                       onTap: () => Navigator.of(context).pushNamed('/game'),
                     ),
@@ -162,8 +178,6 @@ class _Logo extends StatelessWidget {
             ),
           ],
         ),
-        const SizedBox(height: 4),
-        const Text('Arcade Survival', style: TextStyle(fontSize: 16, fontWeight: FontWeight.w600, color: Colors.white70)),
       ],
     );
   }

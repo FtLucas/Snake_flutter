@@ -97,4 +97,22 @@ class PlayerProfile {
     };
     await sp.setString(_kKey, jsonEncode(map));
   }
+
+  // Réinitialiser complètement le profil
+  Future<void> resetProfile() async {
+    coins = 0;
+    skills.clear();
+    skills.addAll({
+      'speed': 0,
+      'shield': 0,
+      'food': 0,
+    });
+    ownedCosmetics.clear();
+    equippedSnakeSkin = null;
+    equippedTrail = null;
+    equippedUiStyle = null;
+    haloFireflies = false;
+    lastDailyGift = null;
+    await _save();
+  }
 }

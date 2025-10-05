@@ -11,6 +11,7 @@ import 'ui/skill_tree_screen.dart';
 import 'ui/settings_screen.dart';
 import 'state/settings.dart';
 import 'state/player_profile.dart';
+import 'state/translations.dart';
 
 void main() {
   WidgetsFlutterBinding.ensureInitialized();
@@ -254,7 +255,7 @@ class _GameScreenState extends State<GameScreen> {
                           });
                         },
                         style: ElevatedButton.styleFrom(backgroundColor: Colors.green, minimumSize: const Size(160, 50)),
-                        child: const Text('Reset'),
+                        child: Text(tr('reset')),
                       ),
                       const SizedBox(height: 10),
                       OutlinedButton(
@@ -277,6 +278,7 @@ class _GameScreenState extends State<GameScreen> {
 }
 
 // Joystick flottant: spawn sous le doigt, suit le doigt s'il s'éloigne
+// NOUVEAU : Accepte aussi les taps n'importe où pour déplacer le serpent
 class _FloatingJoystick extends StatefulWidget {
   final void Function(double dx, double dy) onChanged;
   const _FloatingJoystick({required this.onChanged});
@@ -295,15 +297,7 @@ class _FloatingJoystickState extends State<_FloatingJoystick> {
   double get _maxR => _bgRadius - _knobRadius;
 
   void _start(Offset pos) {
-    final left = AppSettings.instance.leftHandedJoystick;
-    final margin = AppSettings.instance.joystickMargin;
-    final startArea = Rect.fromLTWH(
-      left ? 0 : (MediaQuery.of(context).size.width * 0.5),
-      0,
-      MediaQuery.of(context).size.width * 0.5,
-      MediaQuery.of(context).size.height,
-    ).deflate(margin);
-    if (!startArea.contains(pos)) return;
+    // NOUVEAU : Accepte les taps partout (pas de restriction de zone)
     setState(() {
       _active = true;
       _center = pos;

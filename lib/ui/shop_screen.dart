@@ -1,5 +1,7 @@
 import 'package:flutter/material.dart';
 import '../state/player_profile.dart';
+import '../state/settings.dart';
+import '../state/translations.dart';
 
 class ShopScreen extends StatefulWidget {
   const ShopScreen({super.key});
@@ -10,11 +12,28 @@ class ShopScreen extends StatefulWidget {
 
 class _ShopScreenState extends State<ShopScreen> {
   final profile = PlayerProfile.instance;
+  final settings = AppSettings.instance;
+
+  @override
+  void initState() {
+    super.initState();
+    settings.addListener(_onSettingsChanged);
+  }
+
+  @override
+  void dispose() {
+    settings.removeListener(_onSettingsChanged);
+    super.dispose();
+  }
+
+  void _onSettingsChanged() {
+    if (mounted) setState(() {});
+  }
 
   @override
   Widget build(BuildContext context) {
     return Scaffold(
-      appBar: AppBar(title: const Text('Boutique')),
+      appBar: AppBar(title: Text(tr('shop'))),
       body: Padding(
         padding: const EdgeInsets.all(16),
         child: Column(
@@ -22,20 +41,20 @@ class _ShopScreenState extends State<ShopScreen> {
           children: [
             _coinsBar(),
             const SizedBox(height: 12),
-            _item('Pack de pièces (100)', 100, () {
+            _item(tr('coin_pack_100'), 100, () {
               profile.addCoins(100);
               setState(() {});
             }),
             const SizedBox(height: 12),
-            _item('Pack de pièces (500)', 500, () {
+            _item(tr('coin_pack_500'), 500, () {
               profile.addCoins(500);
               setState(() {});
             }),
             const SizedBox(height: 20),
-            const Text('Cosmétiques', style: TextStyle(fontSize: 16, fontWeight: FontWeight.bold)),
+            Text(tr('cosmetics'), style: const TextStyle(fontSize: 16, fontWeight: FontWeight.bold)),
             const SizedBox(height: 8),
-            _cosmetic('Skin Serpent Vert Néon'),
-            _cosmetic('Trail Étincelles'),
+            _cosmetic(tr('skin_neon_snake'), 'skin_neon'),
+            _cosmetic(tr('trail_sparks'), 'trail_sparks'),
           ],
         ),
       ),
@@ -65,50 +84,49 @@ class _ShopScreenState extends State<ShopScreen> {
         title: Text(title),
         trailing: ElevatedButton(
           onPressed: onBuy,
-          child: const Text('Acheter'),
+          child: Text(tr('buy')),
         ),
       ),
     );
   }
 
-  Widget _cosmetic(String name) {
-    final id = name.contains('Néon') ? 'skin_neon' : (name.contains('Étincelles') ? 'trail_sparks' : name);
+  Widget _cosmetic(String name, String id) {
     final owned = profile.isOwned(id);
     final equipped = (id == profile.equippedSnakeSkin) || (id == profile.equippedTrail);
     return Card(
       child: ListTile(
         leading: const Icon(Icons.brush),
         title: Text(name),
-        subtitle: Text(owned ? (equipped ? 'Équipé' : 'Possédé') : 'Non possédé'),
-        trailing: Row(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            if (!owned)
-              ElevatedButton(
+        subtitle: owned
+            ? (equipped ? Text(tr('equipped')) : null)
+            : Text(tr('locked')),
+        trailing: owned
+            ? (equipped
+                ? null
+                : TextButton(
+                    onPressed: () {
+                      if (id.startsWith('skin_')) {
+                        profile.equippedSnakeSkin = id;
+                      } else {
+                        profile.equippedTrail = id;
+                      }
+                      setState(() {});
+                    },
+                    child: Text(tr('equip')),
+                  ))
+            : ElevatedButton(
                 onPressed: () {
-                  // prix fixe démo 200
-                  if (!profile.spend(200)) {
-                    ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Pas assez de pièces.')));
-                    return;
+                  if (profile.spend(50)) {
+                    profile.ownedCosmetics.add(id);
+                    setState(() {});
+                  } else {
+                    ScaffoldMessenger.of(context).showSnackBar(
+                      SnackBar(content: Text(tr('not_enough_coins'))),
+                    );
                   }
-                  profile.grant(id);
-                  setState(() {});
                 },
-                child: const Text('Acheter 200'),
+                child: Text(tr('buy')),
               ),
-            if (owned)
-              OutlinedButton(
-                onPressed: equipped
-                    ? null
-                    : () {
-                        if (id.startsWith('skin_')) profile.equipSkin(id);
-                        if (id.startsWith('trail_')) profile.equipTrailFx(id);
-                        setState(() {});
-                      },
-                child: Text(equipped ? 'Équipé' : 'Équiper'),
-              ),
-          ],
-        ),
       ),
     );
   }

@@ -1,5 +1,7 @@
 import 'package:flutter/material.dart';
 import '../state/player_profile.dart';
+import '../state/settings.dart';
+import '../state/translations.dart';
 
 class SkillTreeScreen extends StatefulWidget {
   const SkillTreeScreen({super.key});
@@ -10,20 +12,37 @@ class SkillTreeScreen extends StatefulWidget {
 
 class _SkillTreeScreenState extends State<SkillTreeScreen> {
   final profile = PlayerProfile.instance;
+  final settings = AppSettings.instance;
+
+  @override
+  void initState() {
+    super.initState();
+    settings.addListener(_onSettingsChanged);
+  }
+
+  @override
+  void dispose() {
+    settings.removeListener(_onSettingsChanged);
+    super.dispose();
+  }
+
+  void _onSettingsChanged() {
+    if (mounted) setState(() {});
+  }
 
   @override
   Widget build(BuildContext context) {
     return Scaffold(
-      appBar: AppBar(title: const Text('Arbre de compétences')),
+      appBar: AppBar(title: Text(tr('skill_tree'))),
       body: Padding(
         padding: const EdgeInsets.all(16),
         child: Column(
           children: [
             _coinsBar(),
             const SizedBox(height: 12),
-            _skillTile('speed', 'Vitesse', 'Augmente la vitesse de base', Icons.speed),
-            _skillTile('shield', 'Bouclier', 'Augmente la durée du bouclier de départ', Icons.shield),
-            _skillTile('food', 'Glouton', 'Augmente les points gagnés en mangeant', Icons.restaurant),
+            _skillTile('speed', tr('speed_skill'), tr('speed_skill_desc'), Icons.speed),
+            _skillTile('shield', tr('shield_skill'), tr('shield_skill_desc'), Icons.shield),
+            _skillTile('food', tr('food_skill'), tr('food_skill_desc'), Icons.restaurant),
           ],
         ),
       ),
@@ -53,19 +72,19 @@ class _SkillTreeScreenState extends State<SkillTreeScreen> {
     return Card(
       child: ListTile(
         leading: Icon(icon),
-        title: Text('$title  (Niv. $lvl)'),
+        title: Text('$title  (${tr('level_short')} $lvl)'),
         subtitle: Text(desc),
         trailing: ElevatedButton(
           onPressed: () {
             final ok = profile.upgradeSkill(key);
             if (!ok) {
               ScaffoldMessenger.of(context).showSnackBar(
-                const SnackBar(content: Text('Pas assez de pièces')),
+                SnackBar(content: Text(tr('not_enough_coins'))),
               );
             }
             setState(() {});
           },
-          child: Text('Améliorer ($cost)'),
+          child: Text('${tr('upgrade')} ($cost)'),
         ),
       ),
     );
