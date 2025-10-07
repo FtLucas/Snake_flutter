@@ -8,7 +8,6 @@ class AppSettings extends ChangeNotifier {
   // Audio
   double musicVolume = 0.6; // 0..1
   double sfxVolume = 0.8; // 0..1
-  bool vibrations = true;
 
   // Gameplay/UI
   bool leftHandedJoystick = false;
@@ -21,7 +20,6 @@ class AppSettings extends ChangeNotifier {
 
   void setMusic(double v) { musicVolume = v.clamp(0, 1); notifyListeners(); save(); }
   void setSfx(double v) { sfxVolume = v.clamp(0, 1); notifyListeners(); save(); }
-  void setVibrations(bool v) { vibrations = v; notifyListeners(); save(); }
   void setLeftHanded(bool v) { leftHandedJoystick = v; notifyListeners(); save(); }
   void setJoystickSize(double v) { joystickSize = v.clamp(0.6, 1.6); notifyListeners(); save(); }
   void setJoystickOpacity(double v) { joystickOpacity = v.clamp(0.2, 1.0); notifyListeners(); save(); }
@@ -35,7 +33,6 @@ class AppSettings extends ChangeNotifier {
     final sp = await SharedPreferences.getInstance();
     musicVolume = sp.getDouble('music') ?? musicVolume;
     sfxVolume = sp.getDouble('sfx') ?? sfxVolume;
-    vibrations = sp.getBool('vib') ?? vibrations;
     leftHandedJoystick = sp.getBool('leftJoy') ?? leftHandedJoystick;
     joystickSize = sp.getDouble('joySize') ?? joystickSize;
     joystickOpacity = sp.getDouble('joyOpacity') ?? joystickOpacity;
@@ -49,7 +46,6 @@ class AppSettings extends ChangeNotifier {
     final sp = await SharedPreferences.getInstance();
     await sp.setDouble('music', musicVolume);
     await sp.setDouble('sfx', sfxVolume);
-    await sp.setBool('vib', vibrations);
     await sp.setBool('leftJoy', leftHandedJoystick);
     await sp.setDouble('joySize', joystickSize);
     await sp.setDouble('joyOpacity', joystickOpacity);

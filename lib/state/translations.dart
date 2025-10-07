@@ -18,6 +18,7 @@ class Translations {
       // Écran de jeu
       'score': 'Score',
       'level': 'Niveau',
+      'high_score': 'Meilleur score',
       'enemies': 'Ennemis',
       'food': 'Nourriture',
       'game_over': 'GAME OVER',
@@ -35,7 +36,6 @@ class Translations {
       'audio': 'Audio',
       'music': 'Musique',
       'effects': 'Effets',
-      'vibrations': 'Vibrations',
       'gameplay': 'Gameplay',
       'left_handed_joystick': 'Joystick gaucher',
       'joystick_size': 'Taille joystick',
@@ -79,6 +79,18 @@ class Translations {
       'not_enough_coins': 'Pas assez de pièces',
       'speed_skill': 'Vitesse',
       'speed_skill_desc': 'Augmente la vitesse de base',
+
+      // Récompenses
+      'level_rewards': 'Récompenses de niveau',
+      'all_rewards': 'Toutes les récompenses',
+      'next_level': 'Prochain niveau',
+      'points_needed': 'points nécessaires',
+      'for_level': 'pour le niveau',
+      'reward_unlocked': 'Récompense débloquée !',
+      'new_level_reached': 'Nouveau niveau atteint !',
+      'claim': 'Réclamer',
+      'claimed': 'Réclamé',
+      'claim_all': 'Tout réclamer',
       'shield_skill': 'Bouclier',
       'shield_skill_desc': 'Augmente la durée du bouclier de départ',
       'food_skill': 'Glouton',
@@ -95,6 +107,7 @@ class Translations {
       // Game screen
       'score': 'Score',
       'level': 'Level',
+      'high_score': 'High Score',
       'enemies': 'Enemies',
       'food': 'Food',
       'game_over': 'GAME OVER',
@@ -112,7 +125,6 @@ class Translations {
       'audio': 'Audio',
       'music': 'Music',
       'effects': 'Effects',
-      'vibrations': 'Vibrations',
       'gameplay': 'Gameplay',
       'left_handed_joystick': 'Left-handed joystick',
       'joystick_size': 'Joystick size',
@@ -160,6 +172,18 @@ class Translations {
       'shield_skill_desc': 'Increases starting shield duration',
       'food_skill': 'Glutton',
       'food_skill_desc': 'Increases points gained from eating',
+
+      // Rewards
+      'level_rewards': 'Level Rewards',
+      'all_rewards': 'All Rewards',
+      'next_level': 'Next Level',
+      'points_needed': 'points needed',
+      'for_level': 'for level',
+      'reward_unlocked': 'Reward Unlocked!',
+      'new_level_reached': 'New Level Reached!',
+      'claim': 'Claim',
+      'claimed': 'Claimed',
+      'claim_all': 'Claim All',
     },
   };
 }

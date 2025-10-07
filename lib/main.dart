@@ -9,11 +9,13 @@ import 'ui/home_menu_screen.dart';
 import 'ui/shop_screen.dart';
 import 'ui/skill_tree_screen.dart';
 import 'ui/settings_screen.dart';
+import 'ui/rewards_screen.dart';
 import 'state/settings.dart';
 import 'state/player_profile.dart';
 import 'state/translations.dart';
+import 'services/audio_manager.dart';
 
-void main() {
+void main() async {
   WidgetsFlutterBinding.ensureInitialized();
   SystemChrome.setEnabledSystemUIMode(SystemUiMode.immersiveSticky);
   SystemChrome.setSystemUIOverlayStyle(const SystemUiOverlayStyle(
@@ -22,6 +24,10 @@ void main() {
     statusBarIconBrightness: Brightness.light,
     systemNavigationBarIconBrightness: Brightness.light,
   ));
+
+  // Initialiser l'audio manager
+  await AudioManager.instance.initialize();
+
   runApp(const MyApp());
 }
 
@@ -45,7 +51,8 @@ class MyApp extends StatelessWidget {
         '/game': (context) => const GameScreen(),
         '/shop': (context) => const ShopScreen(),
         '/skills': (context) => const SkillTreeScreen(),
-  '/settings': (context) => const SettingsScreen(),
+        '/settings': (context) => const SettingsScreen(),
+        '/rewards': (context) => const RewardsScreen(),
       },
       debugShowCheckedModeBanner: false,
     );

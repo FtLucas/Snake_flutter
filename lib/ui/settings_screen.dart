@@ -59,11 +59,6 @@ class _SettingsScreenState extends State<SettingsScreen> {
               ),
             ),
           ),
-          SwitchListTile(
-            title: Text(tr('vibrations')),
-            value: s.vibrations,
-            onChanged: (v) => setState(() => s.setVibrations(v)),
-          ),
           const SizedBox(height: 12),
           Text(tr('gameplay'), style: const TextStyle(fontSize: 16, fontWeight: FontWeight.bold)),
           const SizedBox(height: 8),

@@ -8,6 +8,7 @@ import 'package:flame/game.dart';
 import 'package:flutter/material.dart';
 import 'state/player_profile.dart';
 import 'state/settings.dart';
+import 'services/audio_manager.dart';
 
 // Fonction d'aide pour adapter les couleurs au mode daltonien
 Color getColorForColorblind(Color original) {
@@ -126,6 +127,24 @@ class EnemyComponent extends PositionComponent {
     _retargetTimer = 2.0 + rnd.nextDouble() * 2.5;
     _bodySideSign = rnd.nextBool() ? 1.0 : -1.0;
     _bodyOffsetPx = 4.0 + rnd.nextDouble() * 8.0;
+  }
+
+  // Calcule le nombre de pièces données selon le type d'ennemi
+  int _getCoinsForEnemy(EnemyClass kind) {
+    switch (kind) {
+      case EnemyClass.antTank:
+        return 3; // Tank: beaucoup de PV, récompense moyenne
+      case EnemyClass.antDps:
+        return 2; // DPS: ennemi de base
+      case EnemyClass.antRanged:
+        return 4; // Ranged: tire de loin, plus difficile
+      case EnemyClass.antHealer:
+        return 5; // Healer: soigne les autres, priorité élevée
+      case EnemyClass.antPoison:
+        return 3; // Poison: dangereux
+      case EnemyClass.antBoss:
+        return 20; // Boss: grande récompense !
+    }
   }
 
   // Composite hit test between snake head (circle) and this ant modeled as three circles
@@ -328,11 +347,21 @@ class EnemyComponent extends PositionComponent {
           gameRef.applyPoison(4.0);
         }
         enemy.health -= 1;
+
+        // Son d'attaque quand le serpent frappe la fourmi
+        AudioManager.instance.playAttackSound();
+
         if (enemy.health <= 0) {
           gameRef._pendingGrowth += 1; // eating grants a segment
           gameRef.enemiesKilled++;
           gameRef.experience += 5;
           gameRef.score += 50;
+
+          // Donner des pièces selon le type d'ennemi
+          final coins = _getCoinsForEnemy(enemy.kind);
+          PlayerProfile.instance.addCoins(coins);
+          print('💰 +$coins pièces pour avoir tué ${enemy.kind}');
+
           gameRef.checkLevelUp();
           final wasBoss = enemy.kind == EnemyClass.antBoss;
           removeFromParent();
@@ -1235,6 +1264,10 @@ class SnakeGame extends FlameGame {
         score += points;
         experience += 2;
         foodEaten++;
+
+        // Son de nourriture mangée
+        AudioManager.instance.playEatSound();
+
         generateFood();
         checkLevelUp();
       }
@@ -1536,6 +1569,9 @@ class SnakeGame extends FlameGame {
       experienceToNextLevel = (experienceToNextLevel * 1.5).round();
   level += 1;
 
+      // Son de level up
+      AudioManager.instance.playLevelUpSound();
+
       // increase difficulty
       if (enemySpawnRate > 1.0) {
         enemySpawnRate *= 0.9;
@@ -1738,6 +1774,12 @@ class SnakeGame extends FlameGame {
   void endGame() {
     gameOver = true;
     gameStarted = false;
+
+    // Son de game over
+    AudioManager.instance.playGameOverSound();
+
+    // Sauvegarder les stats du joueur (high score et niveau)
+    PlayerProfile.instance.updateStats(score);
   }
 
 
